@@ -1,6 +1,5 @@
-// Card.js - Beautiful Rummy Playing Card Component
-import React from 'react';
-import { StyleSheet, Text, View, TouchableOpacity, Platform } from 'react-native';
+import React, { useRef } from 'react';
+import { StyleSheet, Text, View, TouchableOpacity, Platform, Animated, PanResponder } from 'react-native';
 
 const SUIT_SYMBOLS = {
   'H': '♥',
@@ -25,7 +24,7 @@ const VALUE_NAMES = {
   13: 'K'
 };
 
-export default function Card({ card, isSelected, onPress, isWildJoker, style }) {
+export default function Card({ card, isSelected, onPress, isWildJoker, style, onDragRelease, onDragStart, dragEnabled = true }) {
   if (!card) return null;
 
   const { suit, value, isPrintedJoker } = card;
@@ -33,69 +32,146 @@ export default function Card({ card, isSelected, onPress, isWildJoker, style }) 
   const symbol = SUIT_SYMBOLS[suit] || '';
   const displayValue = VALUE_NAMES[value] || value;
 
+  const pan = useRef(new Animated.ValueXY()).current;
+  const isDragging = useRef(false);
+
+  const panResponder = useRef(
+    PanResponder.create({
+      onStartShouldSetPanResponder: () => false,
+      onMoveShouldSetPanResponder: (evt, gestureState) => {
+        if (!dragEnabled) return false;
+        // Capture only if dragged more than 5 pixels
+        return Math.abs(gestureState.dx) > 5 || Math.abs(gestureState.dy) > 5;
+      },
+      onPanResponderGrant: () => {
+        isDragging.current = true;
+        pan.setOffset({
+          x: pan.x._value,
+          y: pan.y._value
+        });
+        pan.setValue({ x: 0, y: 0 });
+        if (onDragStart) {
+          onDragStart();
+        }
+      },
+      onPanResponderMove: Animated.event(
+        [null, { dx: pan.x, dy: pan.y }],
+        { useNativeDriver: false }
+      ),
+      onPanResponderRelease: (e, gestureState) => {
+        isDragging.current = false;
+        pan.flattenOffset();
+        
+        if (onDragRelease) {
+          onDragRelease(card.id, gestureState.moveX, gestureState.moveY, () => {
+            // Spring back if dropped invalidly
+            Animated.spring(pan, {
+              toValue: { x: 0, y: 0 },
+              useNativeDriver: false,
+              friction: 7,
+              tension: 40
+            }).start();
+          });
+        } else {
+          // Default spring back
+          Animated.spring(pan, {
+            toValue: { x: 0, y: 0 },
+            useNativeDriver: false
+          }).start();
+        }
+      }
+    })
+  ).current;
+
+  // Combine drag offset and selection height offset (-15px)
+  const transformStyles = {
+    transform: [
+      { translateX: pan.x },
+      { translateY: Animated.add(pan.y, isSelected ? -15 : 0) }
+    ]
+  };
+
   // Render printed joker card
   if (isPrintedJoker) {
     return (
+      <Animated.View
+        {...panResponder.panHandlers}
+        style={[
+          styles.cardContainer,
+          transformStyles,
+          style,
+          isDragging.current && { zIndex: 999, elevation: 999 }
+        ]}
+      >
+        <TouchableOpacity
+          activeOpacity={0.8}
+          onPress={onPress}
+          style={[
+            styles.card,
+            styles.jokerCard,
+            isSelected && styles.selectedCard,
+          ]}
+        >
+          <Text style={styles.jokerText}>JOKER</Text>
+          <Text style={styles.jokerSymbol}>★</Text>
+          <Text style={styles.jokerTextBottom}>JOKER</Text>
+        </TouchableOpacity>
+      </Animated.View>
+    );
+  }
+
+  return (
+    <Animated.View
+      {...panResponder.panHandlers}
+      style={[
+        styles.cardContainer,
+        transformStyles,
+        style,
+        isDragging.current && { zIndex: 999, elevation: 999 }
+      ]}
+    >
       <TouchableOpacity
         activeOpacity={0.8}
         onPress={onPress}
         style={[
           styles.card,
-          styles.jokerCard,
+          isRed ? styles.redCard : styles.blackCard,
           isSelected && styles.selectedCard,
-          style
         ]}
       >
-        <Text style={styles.jokerText}>JOKER</Text>
-        <Text style={styles.jokerSymbol}>★</Text>
-        <Text style={styles.jokerTextBottom}>JOKER</Text>
-      </TouchableOpacity>
-    );
-  }
+        {/* Wild Joker Badge Indicator */}
+        {isWildJoker && (
+          <View style={styles.wildBadge}>
+            <Text style={styles.wildBadgeText}>JOKER</Text>
+          </View>
+        )}
 
-  return (
-    <TouchableOpacity
-      activeOpacity={0.8}
-      onPress={onPress}
-      style={[
-        styles.card,
-        isRed ? styles.redCard : styles.blackCard,
-        isSelected && styles.selectedCard,
-        style
-      ]}
-    >
-      {/* Wild Joker Badge Indicator */}
-      {isWildJoker && (
-        <View style={styles.wildBadge}>
-          <Text style={styles.wildBadgeText}>JOKER</Text>
+        {/* Top Left Rank and Suit */}
+        <View style={styles.topLeft}>
+          <Text style={[styles.cornerValue, isRed ? styles.redText : styles.blackText]}>
+            {displayValue}
+          </Text>
+          <Text style={[styles.cornerSuit, isRed ? styles.redText : styles.blackText]}>
+            {symbol}
+          </Text>
         </View>
-      )}
 
-      {/* Top Left Rank and Suit */}
-      <View style={styles.topLeft}>
-        <Text style={[styles.cornerValue, isRed ? styles.redText : styles.blackText]}>
-          {displayValue}
-        </Text>
-        <Text style={[styles.cornerSuit, isRed ? styles.redText : styles.blackText]}>
+        {/* Center Large Suit Symbol */}
+        <Text style={[styles.centerSymbol, isRed ? styles.redText : styles.blackText]}>
           {symbol}
         </Text>
-      </View>
 
-      {/* Center Large Suit Symbol */}
-      <Text style={[styles.centerSymbol, isRed ? styles.redText : styles.blackText]}>
-        {symbol}
-      </Text>
-
-      {/* Bottom Right Rank and Suit (Inverted) */}
-      <View style={styles.bottomRight}>
-        <Text style={[styles.cornerValue, isRed ? styles.redText : styles.blackText]}>
-          {displayValue}
-        </Text>
-        <Text style={[styles.cornerSuit, isRed ? styles.redText : styles.blackText]}>
-          {symbol}
-        </Text>
-      </View>
-    </TouchableOpacity>
+        {/* Bottom Right Rank and Suit (Inverted) */}
+        <View style={styles.bottomRight}>
+          <Text style={[styles.cornerValue, isRed ? styles.redText : styles.blackText]}>
+            {displayValue}
+          </Text>
+          <Text style={[styles.cornerSuit, isRed ? styles.redText : styles.blackText]}>
+            {symbol}
+          </Text>
+        </View>
+      </TouchableOpacity>
+    </Animated.View>
   );
 }
 
@@ -130,8 +206,15 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
   },
+  cardContainer: {
+    position: 'relative',
+    ...Platform.select({
+      web: {
+        userSelect: 'none',
+      }
+    })
+  },
   selectedCard: {
-    transform: [{ translateY: -15 }], // Lift card up when selected
     borderColor: '#E5C158', // Glowing gold border
     borderWidth: 2.5,
     shadowColor: '#E5C158',

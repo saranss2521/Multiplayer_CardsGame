@@ -13,7 +13,7 @@ const rooms = new Map();
 const socketToRoom = new Map();
 
 // Turn timer duration in seconds
-const TURN_TIMEOUT_SECONDS = 30;
+const TURN_TIMEOUT_SECONDS = 60;
 // Reconnect grace period in seconds
 const RECONNECT_TIMEOUT_MS = 60000;
 

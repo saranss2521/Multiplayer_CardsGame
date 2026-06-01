@@ -8,10 +8,33 @@ import {
   ScrollView,
   Platform,
   Alert,
-  Modal
+  Modal,
+  useWindowDimensions,
+  ActivityIndicator
 } from 'react-native';
 import { useGameStore } from '../store/gameStore';
 import Card from '../components/Card';
+
+const playSound = (url) => {
+  let finalUrl = url;
+  if (url.includes('button-16')) {
+    finalUrl = 'https://cdn.jsdelivr.net/gh/UnknownEnergy/solitaire@master/card-flip.mp3';
+  } else if (url.includes('card-flip-1')) {
+    finalUrl = 'https://cdn.jsdelivr.net/gh/UnknownEnergy/solitaire@master/card-flip.mp3';
+  } else if (url.includes('card-deal-1')) {
+    finalUrl = 'https://cdn.jsdelivr.net/gh/UnknownEnergy/solitaire@master/card-place.mp3';
+  } else if (url.includes('card-shuffle-1')) {
+    finalUrl = 'https://cdn.jsdelivr.net/gh/datturbomoon/Mystic-Draw@master/shuffle.mp3';
+  } else if (url.includes('bell-ringing-05')) {
+    finalUrl = 'https://cdn.jsdelivr.net/gh/cferdinandi/ding@master/ding.mp3';
+  }
+
+  if (Platform.OS === 'web' && typeof Audio !== 'undefined') {
+    const audio = new Audio(finalUrl);
+    audio.volume = 0.45;
+    audio.play().catch((err) => console.log("Sound play blocked:", err));
+  }
+};
 
 export default function GameScreen({ onNavigate }) {
   const username = useGameStore(state => state.username);
@@ -51,6 +74,145 @@ export default function GameScreen({ onNavigate }) {
   const [chosenDeclareCard, setChosenDeclareCard] = useState(null);
   const [declareLoading, setDeclareLoading] = useState(false);
 
+  const { width, height } = useWindowDimensions();
+  const isPortrait = height > width;
+
+  // Bounding box states for drop targets
+  const [dropZones, setDropZones] = useState({
+    discard: null,
+    finish: null,
+    groups: {}
+  });
+
+  const discardRef = React.useRef(null);
+  const finishRef = React.useRef(null);
+  const groupRefs = React.useRef([]);
+
+  // Sync group refs length dynamically
+  React.useEffect(() => {
+    groupRefs.current = groupRefs.current.slice(0, myHandGroups.length);
+  }, [myHandGroups]);
+
+  const measureZone = (ref, name, groupIdx = null) => {
+    if (ref && ref.current) {
+      setTimeout(() => {
+        ref.current?.measureInWindow((x, y, width, height) => {
+          if (groupIdx !== null) {
+            setDropZones(prev => ({
+              ...prev,
+              groups: {
+                ...prev.groups,
+                [groupIdx]: { x, y, width, height }
+              }
+            }));
+          } else {
+            setDropZones(prev => ({
+              ...prev,
+              [name]: { x, y, width, height }
+            }));
+          }
+        });
+      }, 150);
+    }
+  };
+
+  const measureAllZones = () => {
+    measureZone(discardRef, 'discard');
+    measureZone(finishRef, 'finish');
+    myHandGroups.forEach((group, idx) => {
+      if (groupRefs.current[idx]) {
+        measureZone({ current: groupRefs.current[idx] }, 'groups', idx);
+      }
+    });
+  };
+
+  const handleDragStart = () => {
+    playSound('https://www.soundjay.com/misc/sounds/card-flip-1.mp3');
+    measureAllZones();
+  };
+
+  const handleDragRelease = (cardId, moveX, moveY, resetCardPosition) => {
+    // 1. Check Discard Drop Target
+    const discardZone = dropZones.discard;
+    if (
+      discardZone &&
+      moveX >= discardZone.x &&
+      moveX <= discardZone.x + discardZone.width &&
+      moveY >= discardZone.y &&
+      moveY <= discardZone.y + discardZone.height
+    ) {
+      if (isActiveTurn && turnState === 'discard') {
+        playSound('https://www.soundjay.com/misc/sounds/card-flip-1.mp3');
+        discardCard(cardId);
+        return;
+      } else {
+        Alert.alert('Turn Error', 'You can only discard during your discard turn.');
+      }
+    }
+
+    // 2. Check Finish Slot Target
+    const finishZone = dropZones.finish;
+    if (
+      finishZone &&
+      moveX >= finishZone.x &&
+      moveX <= finishZone.x + finishZone.width &&
+      moveY >= finishZone.y &&
+      moveY <= finishZone.y + finishZone.height
+    ) {
+      if (isActiveTurn && turnState === 'discard') {
+        let foundCard = null;
+        for (const g of myHandGroups) {
+          foundCard = g.find(c => c.id === cardId);
+          if (foundCard) break;
+        }
+        if (foundCard) {
+          setChosenDeclareCard(foundCard);
+          setConfirmDeclareVisible(true);
+          resetCardPosition();
+          return;
+        }
+      } else {
+        Alert.alert('Turn Error', 'You can only declare during your discard turn.');
+      }
+    }
+
+    // 3. Check Card Group Targets
+    let targetGroupIdx = -1;
+    for (const key in dropZones.groups) {
+      const gZone = dropZones.groups[key];
+      if (
+        gZone &&
+        moveX >= gZone.x &&
+        moveX <= gZone.x + gZone.width &&
+        moveY >= gZone.y &&
+        moveY <= gZone.y + gZone.height
+      ) {
+        targetGroupIdx = parseInt(key);
+        break;
+      }
+    }
+
+    if (targetGroupIdx !== -1) {
+      let sourceGroupIdx = -1;
+      for (let i = 0; i < myHandGroups.length; i++) {
+        if (myHandGroups[i].some(c => c.id === cardId)) {
+          sourceGroupIdx = i;
+          break;
+        }
+      }
+
+      if (sourceGroupIdx !== -1 && sourceGroupIdx !== targetGroupIdx) {
+        playSound('https://www.soundjay.com/misc/sounds/card-deal-1.mp3');
+        moveCard(cardId, targetGroupIdx, 0);
+        return;
+      }
+    }
+
+    // If no target matches, snap back to initial spot
+    playSound('https://www.soundjay.com/misc/sounds/card-deal-1.mp3');
+    resetCardPosition();
+  };
+
   // Find index of current client player in players array
   const myIndex = players.findIndex(p => p.username === username);
   const isActiveTurn = turnIndex === myIndex;
@@ -62,12 +224,14 @@ export default function GameScreen({ onNavigate }) {
   const handleDrawDeck = () => {
     if (!isActiveTurn) return;
     if (turnState !== 'draw') return;
+    playSound('https://www.soundjay.com/misc/sounds/card-deal-1.mp3');
     drawCard('deck');
   };
 
   const handleDrawDiscard = () => {
     if (!isActiveTurn) return;
     if (turnState !== 'draw') return;
+    playSound('https://www.soundjay.com/misc/sounds/card-deal-1.mp3');
     drawCard('discard');
   };
 
@@ -79,6 +243,7 @@ export default function GameScreen({ onNavigate }) {
       alert('Please select exactly 1 card to discard.');
       return;
     }
+    playSound('https://www.soundjay.com/misc/sounds/card-flip-1.mp3');
     discardCard(selectedCardIds[0]);
   };
 
@@ -97,6 +262,7 @@ export default function GameScreen({ onNavigate }) {
       setChosenDeclareCard(card);
       setConfirmDeclareVisible(true);
     } else {
+      playSound('https://www.soundjay.com/buttons/sounds/button-16.mp3');
       selectCard(card.id);
     }
   };
@@ -111,8 +277,10 @@ export default function GameScreen({ onNavigate }) {
       setChosenDeclareCard(null);
       if (res.success) {
         if (res.valid) {
+          playSound('https://www.soundjay.com/misc/sounds/bell-ringing-05.mp3');
           onNavigate('Results');
         } else {
+          playSound('https://www.soundjay.com/misc/sounds/card-shuffle-1.mp3');
           alert(`Wrong Show! Penalty of 80 points applied.\nReason: ${res.reason}`);
           onNavigate('Results');
         }
@@ -132,283 +300,324 @@ export default function GameScreen({ onNavigate }) {
   // Auto transition to results if round ended and we are not in declare callback
   React.useEffect(() => {
     if (roundEnded) {
+      if (winner === username) {
+        playSound('https://www.soundjay.com/misc/sounds/bell-ringing-05.mp3');
+      } else {
+        playSound('https://www.soundjay.com/misc/sounds/card-shuffle-1.mp3');
+      }
       onNavigate('Results');
     }
   }, [roundEnded]);
 
+  if (isPortrait) {
+    return (
+      <View style={styles.portraitContainer}>
+        <View style={styles.portraitGlow} />
+        <Text style={styles.portraitTitle}>ROYAL RUMMY</Text>
+        <View style={styles.rotateIconContainer}>
+          <Text style={styles.rotateEmoji}>🔄</Text>
+        </View>
+        <Text style={styles.portraitText}>Please rotate your device to Landscape to play!</Text>
+        <Text style={styles.portraitSubText}>The casino card table is optimized for widescreen play.</Text>
+      </View>
+    );
+  }
+
   return (
     <View style={styles.container}>
-      {/* 1. Opponent Bar */}
-      <View style={styles.opponentsContainer}>
-        {players.map((player, idx) => {
-          const isPlayerTurn = turnIndex === idx;
-          const isMe = idx === myIndex;
-          
-          return (
-            <View 
-              key={player.id || idx} 
-              style={[
-                styles.playerAvatarContainer,
-                isPlayerTurn && styles.activePlayerBorder,
-                !player.connected && styles.disconnectedPlayerBorder
-              ]}
-            >
-              <View style={[styles.avatarCircle, isMe && styles.meAvatarCircle]}>
-                <Text style={styles.avatarLetter}>
-                  {player.username.charAt(0).toUpperCase()}
-                </Text>
-              </View>
+      {/* 2. Wooden Table Border and Rim (Full Screen Layout) */}
+      <View style={styles.tableRim}>
+        {/* 3. Green Felt Inner Playground */}
+        <View style={styles.feltTable}>
+          {/* 1. Opponent Bar (Floated absolutely at the top) */}
+          <View style={styles.opponentsCompactHeader}>
+            {players.map((player, idx) => {
+              const isPlayerTurn = turnIndex === idx;
+              const isMe = idx === myIndex;
               
-              <Text 
-                numberOfLines={1} 
-                style={[styles.playerText, isPlayerTurn && styles.activePlayerText]}
-              >
-                {player.username}
-              </Text>
-              
-              <Text style={styles.cardCountText}>
-                🂠 {isMe ? totalCardsInHand : player.cardCount} cards
-              </Text>
-              
-              {!player.connected ? (
-                <Text style={styles.disconnectedText}>OFFLINE</Text>
-              ) : isPlayerTurn ? (
-                <Text style={styles.turnTimerTick}>{timeLeft}s</Text>
-              ) : null}
-            </View>
-          );
-        })}
-      </View>
-
-      {/* Server message banners */}
-      {error ? (
-        <View style={styles.errorBanner}>
-          <Text style={styles.errorBannerText}>{error}</Text>
-        </View>
-      ) : null}
-
-      {/* Declare Mode Prompt Banner */}
-      {isDeclaring ? (
-        <View style={styles.declareBanner}>
-          <Text style={styles.declareBannerText}>
-            ⚠️ SELECT THE CARD TO DISCARD AND DECLARE YOUR SHOW
-          </Text>
-          <TouchableOpacity 
-            style={styles.cancelDeclareBtn} 
-            onPress={() => setDeclaringMode(false)}
-          >
-            <Text style={styles.cancelDeclareBtnText}>Cancel</Text>
-          </TouchableOpacity>
-        </View>
-      ) : null}
-
-      {/* 2. Table Center Area (Deck, Discard Pile, Wild Joker) */}
-      <View style={styles.tableCenter}>
-        {/* Closed Deck */}
-        <View style={styles.centerPileContainer}>
-          <Text style={styles.pileLabel}>CLOSED DECK</Text>
-          <TouchableOpacity 
-            activeOpacity={0.8}
-            onPress={handleDrawDeck}
-            disabled={!isActiveTurn || turnState !== 'draw'}
-            style={[
-              styles.closedDeckCover,
-              isActiveTurn && turnState === 'draw' && styles.drawGlow
-            ]}
-          >
-            <Text style={styles.deckBackPattern}>♦ ROYAL ♣</Text>
-            <Text style={styles.deckBackCount}>{deckCount} left</Text>
-          </TouchableOpacity>
-        </View>
-
-        {/* Wild Joker Display */}
-        {wildJokerCard ? (
-          <View style={styles.centerPileContainer}>
-            <Text style={styles.jokerLabel}>WILD JOKER</Text>
-            <View style={styles.jokerCardWrapper}>
-              <Card 
-                card={wildJokerCard} 
-                isWildJoker={false}
-                isSelected={false}
-                onPress={() => {}}
-              />
-              <Text style={styles.jokerIndicatorText}>
-                Rank {wildJokerValue === 1 ? 'A' : wildJokerValue} is Joker
-              </Text>
-            </View>
-          </View>
-        ) : null}
-
-        {/* Discard Pile */}
-        <View style={styles.centerPileContainer}>
-          <Text style={styles.pileLabel}>DISCARD PILE</Text>
-          {topDiscardCard ? (
-            <TouchableOpacity 
-              activeOpacity={0.8}
-              onPress={handleDrawDiscard}
-              disabled={!isActiveTurn || turnState !== 'draw'}
-              style={[
-                styles.discardCardWrapper,
-                isActiveTurn && turnState === 'draw' && styles.drawGlow
-              ]}
-            >
-              <Card 
-                card={topDiscardCard} 
-                isWildJoker={topDiscardCard.value === wildJokerValue}
-                isSelected={false}
-                onPress={handleDrawDiscard}
-              />
-            </TouchableOpacity>
-          ) : (
-            <View style={styles.emptyDiscard}>
-              <Text style={styles.emptyDiscardText}>Empty</Text>
-            </View>
-          )}
-        </View>
-      </View>
-
-      {/* 3. Action Controls */}
-      <View style={styles.controlsBar}>
-        <View style={styles.leftControls}>
-          <TouchableOpacity 
-            style={[styles.controlBtn, styles.sortBtn]} 
-            onPress={sortHand}
-          >
-            <Text style={styles.controlBtnText}>Sort Suits</Text>
-          </TouchableOpacity>
-          
-          <TouchableOpacity 
-            style={[
-              styles.controlBtn, 
-              styles.groupBtn, 
-              selectedCardIds.length === 0 && styles.disabledControlBtn
-            ]} 
-            onPress={groupSelectedCards}
-            disabled={selectedCardIds.length === 0}
-          >
-            <Text style={styles.controlBtnText}>Group Selected</Text>
-          </TouchableOpacity>
-        </View>
-
-        {isActiveTurn && !isDeclaring ? (
-          <View style={styles.rightControls}>
-            {turnState === 'draw' ? (
-              <View style={styles.turnHelpBubble}>
-                <Text style={styles.turnHelpText}>← Draw a card</Text>
-              </View>
-            ) : (
-              <>
-                <TouchableOpacity 
+              return (
+                <View 
+                  key={player.id || idx} 
                   style={[
-                    styles.controlBtn, 
-                    styles.discardBtn,
-                    selectedCardIds.length !== 1 && styles.disabledControlBtn
-                  ]} 
-                  onPress={handleDiscard}
-                  disabled={selectedCardIds.length !== 1}
+                    styles.playerAvatarContainer,
+                    isPlayerTurn && styles.activePlayerBorder,
+                    !player.connected && styles.disconnectedPlayerBorder
+                  ]}
                 >
-                  <Text style={styles.discardBtnText}>Discard</Text>
-                </TouchableOpacity>
-
-                <TouchableOpacity 
-                  style={[styles.controlBtn, styles.declareBtn]} 
-                  onPress={handleDeclareTrigger}
-                >
-                  <Text style={styles.declareBtnText}>Declare Show</Text>
-                </TouchableOpacity>
-              </>
-            )}
-          </View>
-        ) : isActiveTurn && isDeclaring ? (
-          <View style={styles.rightControls}>
-            <Text style={styles.declaringTextStatus}>Tap card to show</Text>
-          </View>
-        ) : (
-          <View style={styles.rightControls}>
-            <Text style={styles.waitingTurnText}>Waiting for turn...</Text>
-          </View>
-        )}
-      </View>
-
-      {/* 4. Player Hand (Grouped Cards) */}
-      <ScrollView 
-        horizontal={false} 
-        style={styles.handScrollView} 
-        contentContainerStyle={styles.handContentContainer}
-      >
-        {myHandGroups.map((group, groupIdx) => {
-          return (
-            <View key={groupIdx} style={styles.groupContainer}>
-              <View style={styles.groupHeaderRow}>
-                <Text style={styles.groupHeaderText}>Group {groupIdx + 1}</Text>
-                
-                {/* Selection movement hooks */}
-                {selectedCardIds.length > 0 && (
-                  <TouchableOpacity 
-                    style={styles.moveHereBtn}
-                    onPress={() => {
-                      selectedCardIds.forEach(id => moveCard(id, groupIdx, 0));
-                      clearSelection();
-                    }}
+                  <View style={[styles.avatarCircle, isMe && styles.meAvatarCircle]}>
+                    <Text style={styles.avatarLetter}>
+                      {player.username.charAt(0).toUpperCase()}
+                    </Text>
+                  </View>
+                  
+                  <Text 
+                    numberOfLines={1} 
+                    style={[styles.playerText, isPlayerTurn && styles.activePlayerText]}
                   >
-                    <Text style={styles.moveHereText}>Move Selection Here</Text>
+                    {player.username}
+                  </Text>
+                  
+                  <Text style={styles.cardCountText}>
+                    🂠 {isMe ? totalCardsInHand : player.cardCount}
+                  </Text>
+                  
+                  {!player.connected ? (
+                    <Text style={styles.disconnectedText}>OFF</Text>
+                  ) : isPlayerTurn ? (
+                    <Text style={styles.turnTimerTick}>{timeLeft}s</Text>
+                  ) : null}
+                </View>
+              );
+            })}
+          </View>
+          
+          {/* Server message banners */}
+          {error ? (
+            <View style={styles.errorBanner}>
+              <Text style={styles.errorBannerText}>{error}</Text>
+            </View>
+          ) : null}
+
+          {/* Declare Mode Prompt Banner */}
+          {isDeclaring ? (
+            <View style={styles.declareBanner}>
+              <Text style={styles.declareBannerText}>
+                ⚠️ SELECT CARD OR DRAG IT TO FINISH SLOT
+              </Text>
+              <TouchableOpacity 
+                style={styles.cancelDeclareBtn} 
+                onPress={() => setDeclaringMode(false)}
+              >
+                <Text style={styles.cancelDeclareBtnText}>Cancel</Text>
+              </TouchableOpacity>
+            </View>
+          ) : null}
+
+          {/* Table Center (Decks, Discard, Finish Slot) */}
+          <View style={styles.tableCenter}>
+            
+            {/* Closed Deck + Wild Joker Stack */}
+            <View style={styles.centerPileContainer}>
+              <Text style={styles.pileLabel}>CLOSED DECK</Text>
+              <View style={styles.deckStackWrapper}>
+                {wildJokerCard && (
+                  <View style={styles.wildJokerUnderCard}>
+                    <Card 
+                      card={wildJokerCard} 
+                      isWildJoker={false}
+                      isSelected={false}
+                      dragEnabled={false}
+                      onPress={() => {}}
+                    />
+                  </View>
+                )}
+                <TouchableOpacity 
+                  activeOpacity={0.8}
+                  onPress={handleDrawDeck}
+                  disabled={!isActiveTurn || turnState !== 'draw'}
+                  style={[
+                    styles.closedDeckCover,
+                    isActiveTurn && turnState === 'draw' && styles.drawGlow,
+                    wildJokerCard && styles.closedDeckOffset
+                  ]}
+                >
+                  <Text style={styles.deckBackPattern}>ROYAL</Text>
+                  <Text style={styles.deckBackCount}>{deckCount} left</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+
+            {/* Discard Pile */}
+            <View style={styles.centerPileContainer}>
+              <Text style={styles.pileLabel}>DISCARD PILE</Text>
+              <View 
+                ref={discardRef}
+                onLayout={() => measureZone(discardRef, 'discard')}
+                style={styles.discardZoneWrapper}
+              >
+                {topDiscardCard ? (
+                  <TouchableOpacity 
+                    activeOpacity={0.8}
+                    onPress={handleDrawDiscard}
+                    disabled={!isActiveTurn || turnState !== 'draw'}
+                    style={[
+                      styles.discardCardWrapper,
+                      isActiveTurn && turnState === 'draw' && styles.drawGlow
+                    ]}
+                  >
+                    <Card 
+                      card={topDiscardCard} 
+                      isWildJoker={topDiscardCard.value === wildJokerValue}
+                      isSelected={false}
+                      dragEnabled={false}
+                      onPress={handleDrawDiscard}
+                    />
                   </TouchableOpacity>
+                ) : (
+                  <View style={styles.emptyDiscard}>
+                    <Text style={styles.emptyDiscardText}>Empty</Text>
+                  </View>
                 )}
               </View>
+            </View>
 
-              <ScrollView 
-                horizontal={true} 
-                showsHorizontalScrollIndicator={false}
-                contentContainerStyle={styles.groupCardsScroll}
+            {/* Finish Slot */}
+            <View style={styles.centerPileContainer}>
+              <Text style={styles.pileLabel}>FINISH SLOT</Text>
+              <View 
+                ref={finishRef}
+                onLayout={() => measureZone(finishRef, 'finish')}
+                style={[
+                  styles.finishSlotRect,
+                  isActiveTurn && turnState === 'discard' && styles.finishSlotActive
+                ]}
               >
-                {group.map((card, cardIdx) => {
-                  const isSelected = selectedCardIds.includes(card.id);
-                  const isWild = card.value === wildJokerValue;
-                  
-                  return (
-                    <View key={card.id} style={styles.cardItemWrapper}>
-                      <Card 
-                        card={card}
-                        isSelected={isSelected}
-                        isWildJoker={isWild}
-                        onPress={() => handleCardPress(card)}
-                      />
+                <Text style={styles.finishSlotText}>FINISH</Text>
+                <Text style={styles.finishSlotSubtext}>SLOT</Text>
+              </View>
+            </View>
+
+          </View>
+
+          {/* 4. Controls and Player's Hand Row */}
+          <View style={styles.handAreaContainer}>
+            
+            {/* Left Hand side Utility controls */}
+            <View style={styles.sideControlsColumn}>
+              <TouchableOpacity 
+                style={[styles.sideControlBtn, styles.sortBtn]} 
+                onPress={() => {
+                  playSound('https://www.soundjay.com/misc/sounds/card-shuffle-1.mp3');
+                  sortHand();
+                }}
+              >
+                <Text style={styles.sideControlBtnText}>Sort</Text>
+              </TouchableOpacity>
+              
+              <TouchableOpacity 
+                style={[
+                  styles.sideControlBtn, 
+                  styles.groupBtn, 
+                  selectedCardIds.length === 0 && styles.disabledBtn
+                ]} 
+                onPress={() => {
+                  playSound('https://www.soundjay.com/misc/sounds/card-deal-1.mp3');
+                  groupSelectedCards();
+                }}
+                disabled={selectedCardIds.length === 0}
+              >
+                <Text style={styles.sideControlBtnText}>Group</Text>
+              </TouchableOpacity>
+            </View>
+
+            {/* Hand Groups Row (rendered horizontally side-by-side, no scroll hijacking) */}
+            <ScrollView 
+              horizontal 
+              showsHorizontalScrollIndicator={false}
+              style={styles.handGroupsScrollView}
+              contentContainerStyle={styles.handGroupsRowContent}
+              onScrollEndDrag={measureAllZones}
+              onMomentumScrollEnd={measureAllZones}
+            >
+              {myHandGroups.map((group, groupIdx) => {
+                const stackWidth = group.length > 0 ? (group.length - 1) * 26 + 68 : 0;
+                return (
+                  <View 
+                    key={groupIdx} 
+                    ref={el => groupRefs.current[groupIdx] = el}
+                    onLayout={() => measureZone({ current: groupRefs.current[groupIdx] }, 'groups', groupIdx)}
+                    style={styles.groupContainer}
+                  >
+                    <View style={styles.groupHeaderRow}>
+                      <Text style={styles.groupHeaderText}>G{groupIdx + 1}</Text>
                       
-                      {/* Individual card grouping utilities for non-drag environments */}
-                      {!isDeclaring && (
-                        <View style={styles.cardActionSubrow}>
-                          <TouchableOpacity 
-                            style={styles.microBtn}
-                            onPress={() => handleMoveToNewGroup(card.id)}
-                          >
-                            <Text style={styles.microBtnText}>New</Text>
-                          </TouchableOpacity>
-                          {groupIdx > 0 && (
-                            <TouchableOpacity 
-                              style={styles.microBtn}
-                              onPress={() => handleMoveCard(card.id, groupIdx - 1, 99)}
-                            >
-                              <Text style={styles.microBtnText}>←</Text>
-                            </TouchableOpacity>
-                          )}
-                          {groupIdx < myHandGroups.length - 1 && (
-                            <TouchableOpacity 
-                              style={styles.microBtn}
-                              onPress={() => handleMoveCard(card.id, groupIdx + 1, 0)}
-                            >
-                              <Text style={styles.microBtnText}>→</Text>
-                            </TouchableOpacity>
-                          )}
-                        </View>
+                      {selectedCardIds.length > 0 && (
+                        <TouchableOpacity 
+                          style={styles.moveHereBtn}
+                          onPress={() => {
+                            playSound('https://www.soundjay.com/misc/sounds/card-flip-1.mp3');
+                            selectedCardIds.forEach(id => moveCard(id, groupIdx, 0));
+                            clearSelection();
+                          }}
+                        >
+                          <Text style={styles.moveHereText}>Move</Text>
+                        </TouchableOpacity>
                       )}
                     </View>
-                  );
-                })}
-              </ScrollView>
+
+                    <View style={[styles.groupCardsStack, { width: stackWidth }]}>
+                      {group.map((card, cardIdx) => {
+                        const isSelected = selectedCardIds.includes(card.id);
+                        const isWild = card.value === wildJokerValue;
+                        const isLast = cardIdx === group.length - 1;
+                        
+                        return (
+                          <Card 
+                            key={card.id}
+                            card={card}
+                            isSelected={isSelected}
+                            isWildJoker={isWild}
+                            onPress={() => handleCardPress(card)}
+                            onDragStart={handleDragStart}
+                            onDragRelease={handleDragRelease}
+                            style={!isLast ? { marginRight: -42 } : { marginRight: 0 }}
+                          />
+                        );
+                      })}
+                    </View>
+                  </View>
+                );
+              })}
+            </ScrollView>
+
+            {/* Right Hand side Action controls */}
+            <View style={styles.sideControlsColumn}>
+              {isActiveTurn && !isDeclaring ? (
+                <View style={styles.activeTurnControls}>
+                  {turnState === 'draw' ? (
+                    <View style={styles.turnBubble}>
+                      <Text style={styles.turnBubbleText}>Draw</Text>
+                      <Text style={styles.turnBubbleTextSub}>Card</Text>
+                    </View>
+                  ) : (
+                    <>
+                      <TouchableOpacity 
+                        style={[
+                          styles.sideControlBtn, 
+                          styles.discardBtn,
+                          selectedCardIds.length !== 1 && styles.disabledBtn
+                        ]} 
+                        onPress={handleDiscard}
+                        disabled={selectedCardIds.length !== 1}
+                      >
+                        <Text style={styles.sideControlBtnText}>Discard</Text>
+                      </TouchableOpacity>
+
+                      <TouchableOpacity 
+                        style={[styles.sideControlBtn, styles.declareBtn]} 
+                        onPress={handleDeclareTrigger}
+                      >
+                        <Text style={styles.sideControlBtnTextDark}>Declare</Text>
+                      </TouchableOpacity>
+                    </>
+                  )}
+                </View>
+              ) : isActiveTurn && isDeclaring ? (
+                <View style={styles.turnBubble}>
+                  <Text style={styles.turnBubbleText}>Drag</Text>
+                  <Text style={styles.turnBubbleTextSub}>Card</Text>
+                </View>
+              ) : (
+                <View style={styles.turnBubbleOffline}>
+                  <Text style={styles.turnBubbleTextOffline}>Wait...</Text>
+                </View>
+              )}
             </View>
-          );
-        })}
-      </ScrollView>
+
+          </View>
+
+        </View>
+      </View>
 
       {/* Confirm Declare Modal Dialog */}
       <Modal
@@ -423,7 +632,7 @@ export default function GameScreen({ onNavigate }) {
             {chosenDeclareCard && (
               <View style={styles.declareCardConfirmDisplay}>
                 <Text style={styles.modalText}>You are discarding this card to finish:</Text>
-                <Card card={chosenDeclareCard} isSelected={false} isWildJoker={chosenDeclareCard.value === wildJokerValue} />
+                <Card card={chosenDeclareCard} isSelected={false} isWildJoker={chosenDeclareCard.value === wildJokerValue} dragEnabled={false} />
               </View>
             )}
 
@@ -461,28 +670,94 @@ export default function GameScreen({ onNavigate }) {
 }
 
 const styles = StyleSheet.create({
+  // Portrait locker styles
+  portraitContainer: {
+    flex: 1,
+    backgroundColor: '#03170d', // Very dark green casino background
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 24,
+  },
+  portraitGlow: {
+    position: 'absolute',
+    width: 250,
+    height: 250,
+    borderRadius: 125,
+    backgroundColor: 'rgba(229, 193, 88, 0.12)',
+    filter: Platform.OS === 'web' ? 'blur(60px)' : undefined,
+  },
+  portraitTitle: {
+    fontSize: 28,
+    fontWeight: '900',
+    color: '#E5C158',
+    letterSpacing: 2,
+    marginBottom: 30,
+    textAlign: 'center',
+  },
+  rotateIconContainer: {
+    width: 100,
+    height: 100,
+    borderRadius: 50,
+    backgroundColor: 'rgba(255, 255, 255, 0.05)',
+    borderColor: 'rgba(255,255,255,0.1)',
+    borderWidth: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginBottom: 30,
+  },
+  rotateEmoji: {
+    fontSize: 40,
+  },
+  portraitText: {
+    fontSize: 16,
+    fontWeight: 'bold',
+    color: '#FFF',
+    textAlign: 'center',
+    marginBottom: 8,
+  },
+  portraitSubText: {
+    fontSize: 12,
+    color: '#8AAB99',
+    textAlign: 'center',
+  },
+
+  // Main landscape styles
   container: {
     flex: 1,
-    backgroundColor: '#052F1A', // Rich felt green table
+    backgroundColor: '#1b0e06', // Wooden floor background color
+    padding: 2, // Minimal outer padding
+    flexDirection: 'column',
+    ...Platform.select({
+      web: {
+        backgroundImage: 'linear-gradient(90deg, rgba(0,0,0,0.15) 1px, transparent 1px)',
+        backgroundSize: '80px 100%',
+      }
+    })
   },
-  opponentsContainer: {
+  opponentsCompactHeader: {
+    position: 'absolute',
+    top: 4,
+    left: 20,
+    right: 20,
+    height: 26, // Low-profile height
     flexDirection: 'row',
-    backgroundColor: 'rgba(0, 0, 0, 0.4)',
-    borderBottomWidth: 1.5,
-    borderBottomColor: '#D4AF37', // Golden boundary line
-    paddingVertical: 10,
-    paddingHorizontal: 8,
     justifyContent: 'space-around',
+    alignItems: 'center',
+    backgroundColor: 'rgba(0, 0, 0, 0.55)',
+    borderRadius: 14,
+    paddingHorizontal: 8,
+    borderColor: 'rgba(255, 255, 255, 0.06)',
+    borderWidth: 1,
+    zIndex: 10,
   },
   playerAvatarContainer: {
     alignItems: 'center',
-    paddingVertical: 4,
+    flexDirection: 'row',
+    paddingVertical: 1,
     paddingHorizontal: 8,
-    borderRadius: 8,
-    minWidth: 80,
-    position: 'relative',
+    borderRadius: 6,
     borderColor: 'transparent',
-    borderWidth: 1.5,
+    borderWidth: 1.2,
   },
   activePlayerBorder: {
     borderColor: '#E5C158',
@@ -493,26 +768,27 @@ const styles = StyleSheet.create({
     opacity: 0.7,
   },
   avatarCircle: {
-    width: 30,
-    height: 30,
-    borderRadius: 15,
+    width: 18, // Compact avatar
+    height: 18,
+    borderRadius: 9,
     backgroundColor: '#1E6B47',
     justifyContent: 'center',
     alignItems: 'center',
-    marginBottom: 4,
+    marginRight: 4,
   },
   meAvatarCircle: {
     backgroundColor: '#E5C158',
   },
   avatarLetter: {
-    fontSize: 13,
+    fontSize: 9,
     fontWeight: 'bold',
     color: '#FFF',
   },
   playerText: {
-    fontSize: 11,
+    fontSize: 10,
     color: '#A2C2B2',
     fontWeight: '600',
+    marginRight: 6,
   },
   activePlayerText: {
     color: '#E5C158',
@@ -521,18 +797,15 @@ const styles = StyleSheet.create({
   cardCountText: {
     fontSize: 9,
     color: '#8AAB99',
-    marginTop: 1,
   },
   turnTimerTick: {
-    position: 'absolute',
-    top: 0,
-    right: 2,
     fontSize: 9,
     fontWeight: '900',
     color: '#E5C158',
     backgroundColor: '#000',
     paddingHorizontal: 3,
-    borderRadius: 4,
+    borderRadius: 3,
+    marginLeft: 4,
   },
   disconnectedText: {
     fontSize: 7,
@@ -541,25 +814,29 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(0,0,0,0.5)',
     paddingHorizontal: 3,
     borderRadius: 2,
-    marginTop: 2,
+    marginLeft: 4,
   },
   errorBanner: {
     backgroundColor: '#FF6B6B',
-    paddingVertical: 6,
+    paddingVertical: 4,
+    borderRadius: 8,
     alignItems: 'center',
+    marginBottom: 6,
   },
   errorBannerText: {
     color: '#FFF',
-    fontSize: 12,
+    fontSize: 11,
     fontWeight: '700',
   },
   declareBanner: {
     backgroundColor: '#E5C158',
-    paddingVertical: 8,
-    paddingHorizontal: 15,
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    borderRadius: 8,
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
+    marginBottom: 6,
   },
   declareBannerText: {
     color: '#052F1A',
@@ -570,24 +847,56 @@ const styles = StyleSheet.create({
   cancelDeclareBtn: {
     backgroundColor: '#052F1A',
     paddingVertical: 4,
-    paddingHorizontal: 12,
+    paddingHorizontal: 10,
     borderRadius: 5,
   },
   cancelDeclareBtnText: {
     color: '#E5C158',
-    fontSize: 11,
+    fontSize: 10,
     fontWeight: 'bold',
   },
-  tableCenter: {
+
+  // Wood border table style
+  tableRim: {
     flex: 1,
-    minHeight: 140,
-    maxHeight: 180,
+    backgroundColor: '#522b16', // Wooden trim background
+    borderRadius: 24, // Optimized roundness
+    borderWidth: 6, // Sleek border width
+    borderColor: '#3c1d0e', // Wood border shadow
+    padding: 3, // Minimal trim padding
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.5,
+    shadowRadius: 10,
+    elevation: 10,
+  },
+  feltTable: {
+    flex: 1,
+    backgroundColor: '#0d562f',
+    borderRadius: 18,
+    paddingHorizontal: 6,
+    paddingBottom: 4,
+    paddingTop: 34, // Clear space for top floated HUD
+    flexDirection: 'column',
+    justifyContent: 'space-between',
+    borderColor: 'rgba(229, 193, 88, 0.15)',
+    borderWidth: 1.5,
+    position: 'relative',
+    ...Platform.select({
+      web: {
+        backgroundImage: 'radial-gradient(circle, #0e5e32 0%, #06341b 100%)',
+        boxShadow: 'inset 0 0 50px rgba(0,0,0,0.6)',
+      }
+    })
+  },
+  tableCenter: {
     flexDirection: 'row',
     justifyContent: 'space-around',
     alignItems: 'center',
-    paddingVertical: 10,
+    paddingVertical: 8,
     borderBottomWidth: 1,
     borderBottomColor: 'rgba(255, 255, 255, 0.08)',
+    flex: 1.2, // Allocate a bit more space for piles
   },
   centerPileContainer: {
     alignItems: 'center',
@@ -596,21 +905,28 @@ const styles = StyleSheet.create({
     fontSize: 10,
     fontWeight: 'bold',
     color: '#8AAB99',
-    marginBottom: 6,
+    marginBottom: 4,
     letterSpacing: 0.5,
   },
-  jokerLabel: {
-    fontSize: 10,
-    fontWeight: 'bold',
-    color: '#E5C158',
-    marginBottom: 6,
-    letterSpacing: 0.5,
+  deckStackWrapper: {
+    width: 80,
+    height: 94,
+    position: 'relative',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  wildJokerUnderCard: {
+    position: 'absolute',
+    left: 0,
+    top: 0,
+    opacity: 0.95,
+    transform: [{ rotate: '-10deg' }],
   },
   closedDeckCover: {
     width: 62,
     height: 94,
     borderRadius: 8,
-    backgroundColor: '#8b0000', // Crimson deck back
+    backgroundColor: '#8b0000',
     borderColor: '#E5C158',
     borderWidth: 1.5,
     justifyContent: 'center',
@@ -621,16 +937,27 @@ const styles = StyleSheet.create({
     shadowRadius: 5,
     elevation: 5,
   },
+  closedDeckOffset: {
+    position: 'absolute',
+    right: 0,
+    bottom: 0,
+    shadowColor: '#000',
+    shadowOffset: { width: 3, height: 3 },
+    shadowOpacity: 0.4,
+    shadowRadius: 4,
+    elevation: 6,
+  },
   deckBackPattern: {
-    fontSize: 10,
+    fontSize: 9,
     color: '#E5C158',
     fontWeight: 'bold',
+    letterSpacing: 1,
   },
   deckBackCount: {
-    fontSize: 9,
+    fontSize: 8,
     color: '#FFF',
     fontWeight: '500',
-    marginTop: 10,
+    marginTop: 6,
   },
   drawGlow: {
     shadowColor: '#E5C158',
@@ -640,14 +967,10 @@ const styles = StyleSheet.create({
     borderWidth: 2,
     transform: [{ scale: 1.03 }],
   },
-  jokerCardWrapper: {
-    alignItems: 'center',
-  },
-  jokerIndicatorText: {
-    fontSize: 8,
-    fontWeight: 'bold',
-    color: '#E5C158',
-    marginTop: 4,
+  discardZoneWrapper: {
+    width: 62,
+    height: 94,
+    borderRadius: 8,
   },
   discardCardWrapper: {
     borderRadius: 8,
@@ -664,32 +987,65 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(0,0,0,0.1)',
   },
   emptyDiscardText: {
-    fontSize: 10,
+    fontSize: 9,
     color: '#8AAB99',
     fontWeight: 'bold',
   },
-  controlsBar: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    backgroundColor: 'rgba(0,0,0,0.25)',
-    paddingVertical: 8,
-    paddingHorizontal: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: 'rgba(255, 255, 255, 0.05)',
-  },
-  leftControls: {
-    flexDirection: 'row',
-  },
-  rightControls: {
-    flexDirection: 'row',
+  finishSlotRect: {
+    width: 62,
+    height: 94,
+    borderRadius: 8,
+    borderStyle: 'dashed',
+    borderColor: 'rgba(229, 193, 88, 0.4)',
+    borderWidth: 2,
+    backgroundColor: 'rgba(0, 0, 0, 0.25)',
+    justifyContent: 'center',
     alignItems: 'center',
   },
-  controlBtn: {
-    paddingVertical: 7,
-    paddingHorizontal: 12,
-    borderRadius: 8,
-    marginRight: 8,
+  finishSlotActive: {
+    borderColor: '#E5C158',
+    backgroundColor: 'rgba(229, 193, 88, 0.08)',
+  },
+  finishSlotText: {
+    fontSize: 10,
+    color: '#E5C158',
+    fontWeight: '900',
+    letterSpacing: 1,
+  },
+  finishSlotSubtext: {
+    fontSize: 9,
+    color: '#E5C158',
+    fontWeight: '800',
+    marginTop: 2,
+  },
+
+  // Hand area and controls layout
+  handAreaContainer: {
+    flexDirection: 'row',
+    alignItems: 'flex-end',
+    justifyContent: 'space-between',
+    paddingTop: 6,
+    flex: 1.5, // Hand takes up slightly more vertical space
+  },
+  sideControlsColumn: {
+    width: 70,
     justifyContent: 'center',
+    alignItems: 'center',
+    height: '100%',
+    paddingBottom: 10,
+  },
+  sideControlBtn: {
+    width: 62,
+    height: 44,
+    borderRadius: 10,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginBottom: 8,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.3,
+    shadowRadius: 4,
+    elevation: 4,
   },
   sortBtn: {
     backgroundColor: '#385C48',
@@ -697,116 +1053,140 @@ const styles = StyleSheet.create({
   groupBtn: {
     backgroundColor: '#274D7A',
   },
-  disabledControlBtn: {
-    opacity: 0.35,
-  },
-  controlBtnText: {
-    color: '#FFF',
-    fontSize: 12,
-    fontWeight: '700',
-  },
   discardBtn: {
     backgroundColor: '#8B0000',
-  },
-  discardBtnText: {
-    color: '#FFF',
-    fontSize: 12,
-    fontWeight: '700',
   },
   declareBtn: {
     backgroundColor: '#E5C158',
   },
-  declareBtnText: {
-    color: '#052F1A',
-    fontSize: 12,
-    fontWeight: '800',
+  disabledBtn: {
+    opacity: 0.35,
   },
-  turnHelpBubble: {
-    backgroundColor: '#1E6B47',
-    paddingVertical: 5,
-    paddingHorizontal: 12,
-    borderRadius: 15,
-  },
-  turnHelpText: {
+  sideControlBtnText: {
     color: '#FFF',
-    fontSize: 11,
+    fontSize: 10,
     fontWeight: 'bold',
+    textAlign: 'center',
   },
-  declaringTextStatus: {
-    fontSize: 12,
-    color: '#E5C158',
+  sideControlBtnTextDark: {
+    color: '#052F1A',
+    fontSize: 10,
     fontWeight: 'bold',
+    textAlign: 'center',
   },
-  waitingTurnText: {
-    fontSize: 11,
-    color: '#8AAB99',
-    fontWeight: '600',
+  activeTurnControls: {
+    alignItems: 'center',
+    justifyContent: 'center',
   },
-  handScrollView: {
-    flex: 1,
-    backgroundColor: '#042816', // Darker felt table pocket for hand
-  },
-  handContentContainer: {
-    paddingVertical: 12,
+  turnBubble: {
+    backgroundColor: '#1E6B47',
+    paddingVertical: 8,
     paddingHorizontal: 8,
-    paddingBottom: 40,
+    borderRadius: 10,
+    width: 62,
+    height: 44,
+    justifyContent: 'center',
+    alignItems: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.2,
+    shadowRadius: 3,
+    elevation: 3,
+  },
+  turnBubbleText: {
+    color: '#FFF',
+    fontSize: 10,
+    fontWeight: '900',
+  },
+  turnBubbleTextSub: {
+    color: '#E5C158',
+    fontSize: 8,
+    fontWeight: 'bold',
+    marginTop: 1,
+  },
+  turnBubbleOffline: {
+    backgroundColor: 'rgba(0,0,0,0.2)',
+    borderRadius: 10,
+    width: 62,
+    height: 44,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  turnBubbleTextOffline: {
+    color: '#8AAB99',
+    fontSize: 10,
+    fontWeight: 'bold',
+  },
+
+  // Hand groups fanning list
+  handGroupsRow: {
+    flex: 1,
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'flex-end',
+    height: '100%',
+    paddingHorizontal: 4,
+  },
+  handGroupsScrollView: {
+    flex: 1,
+    height: '100%',
+  },
+  handGroupsRowContent: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'flex-end',
+    paddingHorizontal: 4,
+    minWidth: '100%',
   },
   groupContainer: {
-    backgroundColor: 'rgba(255, 255, 255, 0.02)',
-    borderColor: 'rgba(255, 255, 255, 0.05)',
-    borderWidth: 1,
+    backgroundColor: 'rgba(255, 255, 255, 0.04)',
+    borderColor: 'rgba(255, 255, 255, 0.07)',
+    borderWidth: 1.2,
     borderRadius: 12,
-    padding: 10,
-    marginBottom: 12,
+    padding: 6,
+    marginHorizontal: 3,
+    height: 124,
+    minWidth: 72, // Ensure it expands naturally without squashing cards
+    flexShrink: 0, // Ensure it never collapses under flex constraints
+    justifyContent: 'space-between',
+    ...Platform.select({
+      web: {
+        backdropFilter: 'blur(5px)',
+      }
+    })
   },
   groupHeaderRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: 8,
+    marginBottom: 4,
+    height: 16,
   },
   groupHeaderText: {
-    fontSize: 12,
+    fontSize: 10,
     fontWeight: 'bold',
     color: '#8AAB99',
   },
   moveHereBtn: {
     backgroundColor: '#1B8A5A',
-    paddingVertical: 3,
-    paddingHorizontal: 8,
-    borderRadius: 6,
+    paddingVertical: 1,
+    paddingHorizontal: 5,
+    borderRadius: 4,
   },
   moveHereText: {
     color: '#FFF',
-    fontSize: 9,
-    fontWeight: 'bold',
-  },
-  groupCardsScroll: {
-    paddingVertical: 15, // buffer space to accommodate translateY animations
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  cardItemWrapper: {
-    alignItems: 'center',
-    marginRight: 4,
-  },
-  cardActionSubrow: {
-    flexDirection: 'row',
-    marginTop: 4,
-    justifyContent: 'center',
-  },
-  microBtn: {
-    backgroundColor: 'rgba(255,255,255,0.08)',
-    paddingVertical: 2,
-    paddingHorizontal: 4,
-    borderRadius: 4,
-    marginHorizontal: 1,
-  },
-  microBtnText: {
-    color: '#8AAB99',
     fontSize: 8,
     fontWeight: 'bold',
   },
+  groupCardsStack: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'flex-start',
+    paddingLeft: 4,
+    height: 94,
+  },
+
+  // Modal styles
   modalOverlay: {
     flex: 1,
     backgroundColor: 'rgba(0, 0, 0, 0.75)',

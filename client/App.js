@@ -79,24 +79,26 @@ export default function App() {
       <StatusBar barStyle="light-content" backgroundColor="#052314" />
       
       {/* 1. Global Connection and Configuration Ribbon */}
-      <View style={styles.statusRibbon}>
-        <View style={styles.statusLeft}>
-          <View style={[styles.statusDot, connected ? styles.onlineDot : styles.offlineDot]} />
-          <Text style={styles.statusText}>
-            {connected ? 'CONNECTED TO SERVER' : 'DISCONNECTED'}
-          </Text>
-        </View>
+      {currentScreen === 'Lobby' && (
+        <View style={styles.statusRibbon}>
+          <View style={styles.statusLeft}>
+            <View style={[styles.statusDot, connected ? styles.onlineDot : styles.offlineDot]} />
+            <Text style={styles.statusText}>
+              {connected ? 'CONNECTED TO SERVER' : 'DISCONNECTED'}
+            </Text>
+          </View>
 
-        <TouchableOpacity 
-          style={styles.configToggleBtn} 
-          onPress={() => setShowConfig(!showConfig)}
-        >
-          <Text style={styles.configToggleText}>⚙ Server IP</Text>
-        </TouchableOpacity>
-      </View>
+          <TouchableOpacity 
+            style={styles.configToggleBtn} 
+            onPress={() => setShowConfig(!showConfig)}
+          >
+            <Text style={styles.configToggleText}>⚙ Server IP</Text>
+          </TouchableOpacity>
+        </View>
+      )}
 
       {/* 2. Server URL Configuration Drawer */}
-      {showConfig && (
+      {showConfig && currentScreen === 'Lobby' && (
         <View style={styles.configDrawer}>
           <Text style={styles.configLabel}>Socket.IO Server Address:</Text>
           <View style={styles.configInputRow}>

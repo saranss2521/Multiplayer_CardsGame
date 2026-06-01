@@ -9,7 +9,8 @@ import {
   ActivityIndicator,
   KeyboardAvoidingView,
   Platform,
-  ScrollView
+  ScrollView,
+  useWindowDimensions
 } from 'react-native';
 import { useGameStore } from '../store/gameStore';
 
@@ -19,16 +20,35 @@ export default function LobbyScreen({ onNavigate }) {
   const [loading, setLoading] = useState(false);
   const [localErr, setLocalErr] = useState('');
 
+  const { width, height } = useWindowDimensions();
+  const isLandscape = width > height;
+
   const createRoom = useGameStore(state => state.createRoom);
   const joinRoom = useGameStore(state => state.joinRoom);
   const error = useGameStore(state => state.error);
   const clearError = useGameStore(state => state.clearError);
+
+  const enterFullscreen = () => {
+    if (Platform.OS === 'web' && typeof document !== 'undefined') {
+      const docEl = document.documentElement;
+      if (docEl.requestFullscreen) {
+        docEl.requestFullscreen().catch((err) => console.log(err));
+      } else if (docEl.webkitRequestFullscreen) {
+        docEl.webkitRequestFullscreen();
+      } else if (docEl.mozRequestFullScreen) {
+        docEl.mozRequestFullScreen();
+      } else if (docEl.msRequestFullscreen) {
+        docEl.msRequestFullscreen();
+      }
+    }
+  };
 
   const handleCreate = () => {
     if (!name.trim()) {
       setLocalErr('Please enter a username first.');
       return;
     }
+    enterFullscreen();
     setLocalErr('');
     clearError();
     setLoading(true);
@@ -50,6 +70,7 @@ export default function LobbyScreen({ onNavigate }) {
       setLocalErr('Please enter a valid 5-6 digit Room Code.');
       return;
     }
+    enterFullscreen();
     setLocalErr('');
     clearError();
     setLoading(true);
@@ -74,78 +95,89 @@ export default function LobbyScreen({ onNavigate }) {
         <View style={styles.glowTopLeft} />
         <View style={styles.glowBottomRight} />
 
-        <View style={styles.header}>
-          <Text style={styles.title}>ROYAL RUMMY</Text>
-          <Text style={styles.subtitle}>Pure Indian 13-Card Multiplayer Fun</Text>
-        </View>
-
-        <View style={styles.card}>
-          <Text style={styles.cardHeader}>Player Details</Text>
-          
-          <Text style={styles.label}>Your Username</Text>
-          <TextInput
-            style={styles.input}
-            placeholder="e.g., ShufflerPro"
-            placeholderTextColor="rgba(255, 255, 255, 0.4)"
-            value={name}
-            onChangeText={(t) => {
-              setName(t);
-              setLocalErr('');
-              clearError();
-            }}
-            maxLength={12}
-            autoCorrect={false}
-          />
-
-          {displayError ? (
-            <Text style={styles.errorText}>{displayError}</Text>
-          ) : null}
-
-          {loading ? (
-            <ActivityIndicator size="large" color="#E5C158" style={styles.loader} />
-          ) : (
-            <View style={styles.actionContainer}>
-              {/* Create Room Button */}
-              <TouchableOpacity style={styles.createButton} onPress={handleCreate}>
-                <Text style={styles.createButtonText}>Create New Room</Text>
-                <Text style={styles.buttonSubtext}>(You will be Host)</Text>
-              </TouchableOpacity>
-
-              <View style={styles.dividerContainer}>
-                <View style={styles.dividerLine} />
-                <Text style={styles.dividerText}>OR</Text>
-                <View style={styles.dividerLine} />
-              </View>
-
-              {/* Join Room Section */}
-              <View style={styles.joinSection}>
-                <Text style={styles.label}>Enter Room Code</Text>
-                <TextInput
-                  style={[styles.input, styles.codeInput]}
-                  placeholder="6-DIGIT CODE"
-                  placeholderTextColor="rgba(255, 255, 255, 0.4)"
-                  value={code}
-                  onChangeText={(t) => {
-                    setCode(t);
-                    setLocalErr('');
-                    clearError();
-                  }}
-                  autoCapitalize="characters"
-                  autoCorrect={false}
-                  maxLength={6}
-                />
-                
-                <TouchableOpacity style={styles.joinButton} onPress={handleJoin}>
-                  <Text style={styles.joinButtonText}>Join Room</Text>
-                </TouchableOpacity>
-              </View>
+        <View style={[styles.mainLayout, isLandscape && styles.landscapeLayout]}>
+          <View style={[styles.leftPanel, isLandscape && styles.landscapeLeftPanel]}>
+            <View style={styles.header}>
+              <Text style={styles.title}>ROYAL RUMMY</Text>
+              <Text style={styles.subtitle}>Pure Indian 13-Card Multiplayer Fun</Text>
             </View>
-          )}
+            {isLandscape && (
+              <View style={styles.landscapeFooter}>
+                <Text style={styles.footerText}>♣ No Gambling • ♦ Purely for Fun • ♥ Real Rummy Rules • ♠</Text>
+              </View>
+            )}
+          </View>
+
+          <View style={styles.card}>
+            <Text style={styles.cardHeader}>Player Details</Text>
+            
+            <Text style={styles.label}>Your Username</Text>
+            <TextInput
+              style={styles.input}
+              placeholder="e.g., ShufflerPro"
+              placeholderTextColor="rgba(255, 255, 255, 0.4)"
+              value={name}
+              onChangeText={(t) => {
+                setName(t);
+                setLocalErr('');
+                clearError();
+              }}
+              maxLength={12}
+              autoCorrect={false}
+            />
+
+            {displayError ? (
+              <Text style={styles.errorText}>{displayError}</Text>
+            ) : null}
+
+            {loading ? (
+              <ActivityIndicator size="large" color="#E5C158" style={styles.loader} />
+            ) : (
+              <View style={styles.actionContainer}>
+                {/* Create Room Button */}
+                <TouchableOpacity style={styles.createButton} onPress={handleCreate}>
+                  <Text style={styles.createButtonText}>Create New Room</Text>
+                  <Text style={styles.buttonSubtext}>(You will be Host)</Text>
+                </TouchableOpacity>
+
+                <View style={styles.dividerContainer}>
+                  <View style={styles.dividerLine} />
+                  <Text style={styles.dividerText}>OR</Text>
+                  <View style={styles.dividerLine} />
+                </View>
+
+                {/* Join Room Section */}
+                <View style={styles.joinSection}>
+                  <Text style={styles.label}>Enter Room Code</Text>
+                  <TextInput
+                    style={[styles.input, styles.codeInput]}
+                    placeholder="6-DIGIT CODE"
+                    placeholderTextColor="rgba(255, 255, 255, 0.4)"
+                    value={code}
+                    onChangeText={(t) => {
+                      setCode(t);
+                      setLocalErr('');
+                      clearError();
+                    }}
+                    autoCapitalize="characters"
+                    autoCorrect={false}
+                    maxLength={6}
+                  />
+                  
+                  <TouchableOpacity style={styles.joinButton} onPress={handleJoin}>
+                    <Text style={styles.joinButtonText}>Join Room</Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+            )}
+          </View>
         </View>
 
-        <View style={styles.footer}>
-          <Text style={styles.footerText}>♣ No Gambling • ♦ Purely for Fun • ♥ Real Rummy Rules • ♠</Text>
-        </View>
+        {!isLandscape && (
+          <View style={styles.footer}>
+            <Text style={styles.footerText}>♣ No Gambling • ♦ Purely for Fun • ♥ Real Rummy Rules • ♠</Text>
+          </View>
+        )}
       </ScrollView>
     </KeyboardAvoidingView>
   );
@@ -154,7 +186,13 @@ export default function LobbyScreen({ onNavigate }) {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#052314', // Deep green casino background
+    backgroundColor: '#1b0e06', // Wooden floor color
+    ...Platform.select({
+      web: {
+        backgroundImage: 'linear-gradient(90deg, rgba(0,0,0,0.15) 1px, transparent 1px)',
+        backgroundSize: '80px 100%',
+      }
+    })
   },
   scrollContainer: {
     flexGrow: 1,
@@ -210,19 +248,20 @@ const styles = StyleSheet.create({
   card: {
     width: '100%',
     maxWidth: 400,
-    backgroundColor: 'rgba(255, 255, 255, 0.05)',
-    borderColor: 'rgba(255, 255, 255, 0.1)',
-    borderWidth: 1,
-    borderRadius: 20,
+    backgroundColor: '#0d562f', // Felt green
+    borderColor: '#522b16', // Wooden brown border
+    borderWidth: 6, // Wooden rim
+    borderRadius: 24,
     padding: 24,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 10 },
-    shadowOpacity: 0.3,
-    shadowRadius: 20,
+    shadowOpacity: 0.4,
+    shadowRadius: 15,
     elevation: 8,
     ...Platform.select({
       web: {
-        backdropFilter: 'blur(20px)',
+        backgroundImage: 'radial-gradient(circle, #0e5e32 0%, #06341b 100%)',
+        boxShadow: 'inset 0 0 30px rgba(0,0,0,0.5)',
       }
     })
   },
@@ -340,5 +379,29 @@ const styles = StyleSheet.create({
     color: '#557A65',
     letterSpacing: 0.5,
     textAlign: 'center',
+  },
+  mainLayout: {
+    width: '100%',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  landscapeLayout: {
+    flexDirection: 'row',
+    justifyContent: 'space-around',
+    maxWidth: 900,
+    width: '100%',
+    alignItems: 'center',
+  },
+  leftPanel: {
+    alignItems: 'center',
+  },
+  landscapeLeftPanel: {
+    flex: 1.2,
+    marginRight: 24,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  landscapeFooter: {
+    marginTop: 20,
   }
 });

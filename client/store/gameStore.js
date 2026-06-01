@@ -39,7 +39,7 @@ export const useGameStore = create((set, get) => ({
   roundEnded: false,
   turnIndex: 0,
   turnState: 'draw', // 'draw' or 'discard'
-  timeLeft: 30,
+  timeLeft: 60,
   wildJokerCard: null,
   wildJokerValue: 0,
   deckCount: 0,
@@ -62,7 +62,7 @@ export const useGameStore = create((set, get) => ({
       roundEnded: false,
       turnIndex: 0,
       turnState: 'draw',
-      timeLeft: 30,
+      timeLeft: 60,
       wildJokerCard: null,
       wildJokerValue: 0,
       deckCount: 0,
@@ -104,7 +104,7 @@ export const useGameStore = create((set, get) => ({
 
     // Receive updated state from server
     socketInstance.on('game_state_update', (state) => {
-      const { myHandGroups } = get();
+      const { myHandGroups, gameStarted: prevGameStarted, roundEnded: prevRoundEnded } = get();
       
       // Find current player cards from state
       const myState = state.players.find(p => p.id === socketInstance.id);
@@ -117,10 +117,18 @@ export const useGameStore = create((set, get) => ({
         const currentCardIds = myHandGroups.flat().map(c => c.id).sort().join(',');
         const newCardIds = newCards.map(c => c.id).sort().join(',');
 
-        if (currentCardIds !== newCardIds) {
-          // If the card list actually changed (e.g. game started, card drawn/discarded)
-          if (myHandGroups.length === 0 || state.roundEnded || !state.gameStarted) {
-            // Fresh start/end: Auto-sort cards into suit groups
+        // Check if game or round just started/restarted
+        const isNewGameOrRound = state.gameStarted && (!prevGameStarted || prevRoundEnded);
+
+        if (isNewGameOrRound) {
+          // Fresh start: Place all cards in a single group (no automatic grouping by suit)
+          updatedHandGroups = [newCards];
+        } else if (currentCardIds !== newCardIds) {
+          // If the card list actually changed (e.g. card drawn/discarded)
+          if (myHandGroups.length === 0) {
+            updatedHandGroups = [newCards];
+          } else if (state.roundEnded || !state.gameStarted) {
+            // End of round / not started: Auto-sort cards into suit groups
             updatedHandGroups = autoSortCards(newCards);
           } else {
             // Update existing groupings incrementally to preserve player ordering

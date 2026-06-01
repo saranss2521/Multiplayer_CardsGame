@@ -54,7 +54,24 @@ export default function ResultsScreen({ onNavigate }) {
     restartGame();
   };
 
+  const exitFullscreen = () => {
+    if (Platform.OS === 'web' && typeof document !== 'undefined') {
+      if (document.fullscreenElement) {
+        if (document.exitFullscreen) {
+          document.exitFullscreen().catch((err) => console.log(err));
+        } else if (document.webkitExitFullscreen) {
+          document.webkitExitFullscreen();
+        } else if (document.mozCancelFullScreen) {
+          document.mozCancelFullScreen();
+        } else if (document.msExitFullscreen) {
+          document.msExitFullscreen();
+        }
+      }
+    }
+  };
+
   const handleLeave = () => {
+    exitFullscreen();
     if (socket) {
       socket.disconnect();
     }
@@ -171,7 +188,13 @@ export default function ResultsScreen({ onNavigate }) {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#052F1A', // Felt green table
+    backgroundColor: '#1b0e06', // Wooden floor color
+    ...Platform.select({
+      web: {
+        backgroundImage: 'linear-gradient(90deg, rgba(0,0,0,0.15) 1px, transparent 1px)',
+        backgroundSize: '80px 100%',
+      }
+    })
   },
   glowTop: {
     position: 'absolute',
@@ -211,12 +234,23 @@ const styles = StyleSheet.create({
     paddingBottom: 40,
   },
   scorecardTable: {
-    backgroundColor: 'rgba(0, 0, 0, 0.3)',
-    borderRadius: 12,
+    backgroundColor: '#0d562f',
+    borderColor: '#522b16',
+    borderWidth: 4,
+    borderRadius: 16,
     padding: 12,
-    borderColor: 'rgba(255,255,255,0.06)',
-    borderWidth: 1,
     marginBottom: 25,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 10,
+    elevation: 5,
+    ...Platform.select({
+      web: {
+        backgroundImage: 'radial-gradient(circle, #0e5e32 0%, #06341b 100%)',
+        boxShadow: 'inset 0 0 20px rgba(0,0,0,0.5)',
+      }
+    })
   },
   tableHeader: {
     flexDirection: 'row',
@@ -276,12 +310,23 @@ const styles = StyleSheet.create({
     letterSpacing: 1,
   },
   playerHandCard: {
-    backgroundColor: 'rgba(255, 255, 255, 0.03)',
-    borderColor: 'rgba(255, 255, 255, 0.05)',
-    borderWidth: 1,
-    borderRadius: 12,
+    backgroundColor: '#0d562f',
+    borderColor: '#522b16',
+    borderWidth: 4,
+    borderRadius: 16,
     padding: 12,
     marginBottom: 12,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 10,
+    elevation: 5,
+    ...Platform.select({
+      web: {
+        backgroundImage: 'radial-gradient(circle, #0e5e32 0%, #06341b 100%)',
+        boxShadow: 'inset 0 0 20px rgba(0,0,0,0.5)',
+      }
+    })
   },
   handHeader: {
     flexDirection: 'row',

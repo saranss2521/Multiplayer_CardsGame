@@ -8,7 +8,8 @@ import {
   ScrollView,
   Platform,
   Clipboard,
-  ActivityIndicator
+  ActivityIndicator,
+  useWindowDimensions
 } from 'react-native';
 import { useGameStore } from '../store/gameStore';
 
@@ -21,6 +22,9 @@ export default function WaitingRoomScreen({ onNavigate }) {
   const startGame = useGameStore(state => state.startGame);
   const resetStore = useGameStore(state => state.resetStore);
   const socket = useGameStore(state => state.socket);
+
+  const { width, height } = useWindowDimensions();
+  const isLandscape = width > height;
 
   const handleCopyCode = () => {
     if (roomCode) {
@@ -35,7 +39,24 @@ export default function WaitingRoomScreen({ onNavigate }) {
     startGame();
   };
 
+  const exitFullscreen = () => {
+    if (Platform.OS === 'web' && typeof document !== 'undefined') {
+      if (document.fullscreenElement) {
+        if (document.exitFullscreen) {
+          document.exitFullscreen().catch((err) => console.log(err));
+        } else if (document.webkitExitFullscreen) {
+          document.webkitExitFullscreen();
+        } else if (document.mozCancelFullScreen) {
+          document.mozCancelFullScreen();
+        } else if (document.msExitFullscreen) {
+          document.msExitFullscreen();
+        }
+      }
+    }
+  };
+
   const handleLeave = () => {
+    exitFullscreen();
     if (socket) {
       socket.disconnect(); // Disconnect automatically triggers removal
     }
@@ -52,78 +73,117 @@ export default function WaitingRoomScreen({ onNavigate }) {
       <View style={styles.glowTopRight} />
       <View style={styles.glowBottomLeft} />
 
-      <View style={styles.header}>
-        <Text style={styles.label}>Room Code</Text>
-        <TouchableOpacity style={styles.codeContainer} onPress={handleCopyCode}>
-          <Text style={styles.roomCode}>{roomCode}</Text>
-          <Text style={styles.copyText}>Tap to Copy Code</Text>
-        </TouchableOpacity>
-      </View>
-
-      <View style={styles.card}>
-        <View style={styles.cardHeaderRow}>
-          <Text style={styles.cardHeader}>Players Joined</Text>
-          <View style={styles.countBadge}>
-            <Text style={styles.countText}>{players.length} / 6</Text>
-          </View>
-        </View>
-
-        <ScrollView style={styles.playerList} contentContainerStyle={styles.listContent}>
-          {players.map((player, index) => {
-            const isMe = player.username === username;
-            return (
-              <View key={player.id || index} style={[styles.playerItem, isMe && styles.meItem]}>
-                <View style={[styles.avatar, isMe && styles.meAvatar]}>
-                  <Text style={styles.avatarText}>
-                    {player.username.charAt(0).toUpperCase()}
-                  </Text>
-                </View>
-                <Text style={[styles.playerName, isMe && styles.meName]}>
-                  {player.username} {isMe ? '(You)' : ''}
-                </Text>
-                {player.isAdmin ? (
-                  <View style={styles.adminBadge}>
-                    <Text style={styles.adminText}>👑 Host</Text>
-                  </View>
-                ) : (
-                  <View style={styles.readyBadge}>
-                    <Text style={styles.readyText}>Ready</Text>
-                  </View>
-                )}
-              </View>
-            );
-          })}
-        </ScrollView>
-
-        {error ? (
-          <Text style={styles.errorText}>{error}</Text>
-        ) : null}
-
-        <View style={styles.actionContainer}>
-          {isAdmin ? (
-            <TouchableOpacity
-              style={[styles.startButton, players.length < 2 && styles.disabledButton]}
-              onPress={handleStartGame}
-              disabled={players.length < 2}
-            >
-              <Text style={styles.startButtonText}>Start Game</Text>
+      <View style={[styles.mainLayout, isLandscape && styles.landscapeLayout]}>
+        
+        {/* Left Side Panel */}
+        <View style={[styles.leftPanel, isLandscape && styles.landscapeLeftPanel]}>
+          <View style={styles.header}>
+            <Text style={styles.label}>Room Code</Text>
+            <TouchableOpacity style={styles.codeContainer} onPress={handleCopyCode}>
+              <Text style={styles.roomCode}>{roomCode}</Text>
+              <Text style={styles.copyText}>Tap to Copy Code</Text>
             </TouchableOpacity>
-          ) : (
-            <View style={styles.waitingContainer}>
-              <ActivityIndicator size="small" color="#8AAB99" style={{ marginRight: 8 }} />
-              <Text style={styles.waitingText}>Waiting for Host to start...</Text>
+          </View>
+
+          {isLandscape && (
+            <View style={styles.landscapeControls}>
+              {isAdmin ? (
+                <TouchableOpacity
+                  style={[styles.startButton, players.length < 2 && styles.disabledButton]}
+                  onPress={handleStartGame}
+                  disabled={players.length < 2}
+                >
+                  <Text style={styles.startButtonText}>Start Game</Text>
+                </TouchableOpacity>
+              ) : (
+                <View style={styles.waitingContainer}>
+                  <ActivityIndicator size="small" color="#8AAB99" style={{ marginRight: 8 }} />
+                  <Text style={styles.waitingText}>Waiting for Host...</Text>
+                </View>
+              )}
+
+              {players.length < 2 && isAdmin ? (
+                <Text style={styles.infoText}>Need at least 2 players</Text>
+              ) : null}
+
+              <TouchableOpacity style={[styles.leaveButton, styles.landscapeLeaveButton]} onPress={handleLeave}>
+                <Text style={styles.leaveButtonText}>Leave Room</Text>
+              </TouchableOpacity>
             </View>
           )}
-
-          {players.length < 2 && isAdmin ? (
-            <Text style={styles.infoText}>Need at least 2 players to start</Text>
-          ) : null}
         </View>
+
+        {/* Right Side Panel / Card */}
+        <View style={[styles.card, isLandscape && styles.landscapeCard]}>
+          <View style={styles.cardHeaderRow}>
+            <Text style={styles.cardHeader}>Players Joined</Text>
+            <View style={styles.countBadge}>
+              <Text style={styles.countText}>{players.length} / 6</Text>
+            </View>
+          </View>
+
+          <ScrollView style={styles.playerList} contentContainerStyle={styles.listContent}>
+            {players.map((player, index) => {
+              const isMe = player.username === username;
+              return (
+                <View key={player.id || index} style={[styles.playerItem, isMe && styles.meItem]}>
+                  <View style={[styles.avatar, isMe && styles.meAvatar]}>
+                    <Text style={styles.avatarText}>
+                      {player.username.charAt(0).toUpperCase()}
+                    </Text>
+                  </View>
+                  <Text style={[styles.playerName, isMe && styles.meName]}>
+                    {player.username} {isMe ? '(You)' : ''}
+                  </Text>
+                  {player.isAdmin ? (
+                    <View style={styles.adminBadge}>
+                      <Text style={styles.adminText}>👑 Host</Text>
+                    </View>
+                  ) : (
+                    <View style={styles.readyBadge}>
+                      <Text style={styles.readyText}>Ready</Text>
+                    </View>
+                  )}
+                </View>
+              );
+            })}
+          </ScrollView>
+
+          {error ? (
+            <Text style={styles.errorText}>{error}</Text>
+          ) : null}
+
+          {!isLandscape && (
+            <View style={styles.actionContainer}>
+              {isAdmin ? (
+                <TouchableOpacity
+                  style={[styles.startButton, players.length < 2 && styles.disabledButton]}
+                  onPress={handleStartGame}
+                  disabled={players.length < 2}
+                >
+                  <Text style={styles.startButtonText}>Start Game</Text>
+                </TouchableOpacity>
+              ) : (
+                <View style={styles.waitingContainer}>
+                  <ActivityIndicator size="small" color="#8AAB99" style={{ marginRight: 8 }} />
+                  <Text style={styles.waitingText}>Waiting for Host to start...</Text>
+                </View>
+              )}
+
+              {players.length < 2 && isAdmin ? (
+                <Text style={styles.infoText}>Need at least 2 players to start</Text>
+              ) : null}
+            </View>
+          )}
+        </View>
+
       </View>
 
-      <TouchableOpacity style={styles.leaveButton} onPress={handleLeave}>
-        <Text style={styles.leaveButtonText}>Leave Room</Text>
-      </TouchableOpacity>
+      {!isLandscape && (
+        <TouchableOpacity style={styles.leaveButton} onPress={handleLeave}>
+          <Text style={styles.leaveButtonText}>Leave Room</Text>
+        </TouchableOpacity>
+      )}
     </View>
   );
 }
@@ -131,10 +191,16 @@ export default function WaitingRoomScreen({ onNavigate }) {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#052314', // Deep green casino background
+    backgroundColor: '#1b0e06', // Wooden floor color
     alignItems: 'center',
     justifyContent: 'center',
     padding: 20,
+    ...Platform.select({
+      web: {
+        backgroundImage: 'linear-gradient(90deg, rgba(0,0,0,0.15) 1px, transparent 1px)',
+        backgroundSize: '80px 100%',
+      }
+    })
   },
   glowTopRight: {
     position: 'absolute',
@@ -197,19 +263,20 @@ const styles = StyleSheet.create({
     width: '100%',
     maxWidth: 400,
     maxHeight: 450,
-    backgroundColor: 'rgba(255, 255, 255, 0.05)',
-    borderColor: 'rgba(255, 255, 255, 0.1)',
-    borderWidth: 1,
-    borderRadius: 20,
+    backgroundColor: '#0d562f', // Felt green
+    borderColor: '#522b16', // Wooden brown border
+    borderWidth: 6, // Wooden rim
+    borderRadius: 24,
     padding: 20,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 10 },
-    shadowOpacity: 0.3,
-    shadowRadius: 20,
+    shadowOpacity: 0.4,
+    shadowRadius: 15,
     elevation: 8,
     ...Platform.select({
       web: {
-        backdropFilter: 'blur(20px)',
+        backgroundImage: 'radial-gradient(circle, #0e5e32 0%, #06341b 100%)',
+        boxShadow: 'inset 0 0 30px rgba(0,0,0,0.5)',
       }
     })
   },
@@ -372,5 +439,40 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '700',
     letterSpacing: 0.5,
+  },
+  mainLayout: {
+    width: '100%',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  landscapeLayout: {
+    flexDirection: 'row',
+    justifyContent: 'space-around',
+    maxWidth: 900,
+    width: '100%',
+    alignItems: 'center',
+  },
+  leftPanel: {
+    alignItems: 'center',
+  },
+  landscapeLeftPanel: {
+    flex: 1,
+    marginRight: 20,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  landscapeControls: {
+    width: '100%',
+    maxWidth: 260,
+    alignItems: 'center',
+    marginTop: 15,
+  },
+  landscapeCard: {
+    flex: 1.2,
+    maxWidth: 400,
+    maxHeight: 280,
+  },
+  landscapeLeaveButton: {
+    marginTop: 15,
   }
 });

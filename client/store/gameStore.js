@@ -82,8 +82,13 @@ export const useGameStore = create((set, get) => ({
     }
 
     const socketInstance = io(serverUrl, {
-      transports: ['websocket'],
+      transports: ['polling', 'websocket'], // polling first for Android release build compatibility
+      upgrade: true,                        // then upgrade to websocket once connected
       autoConnect: true,
+      reconnection: true,
+      reconnectionAttempts: 5,
+      reconnectionDelay: 1000,
+      timeout: 10000,
     });
 
     socketInstance.on('connect', () => {

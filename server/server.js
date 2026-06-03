@@ -280,6 +280,20 @@ io.on('connection', (socket) => {
 });
 
 const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => {
+const HOST = '0.0.0.0'; // Listen on all network interfaces (required for LAN/mobile access)
+
+server.listen(PORT, HOST, () => {
+  const { networkInterfaces } = require('os');
+  const nets = networkInterfaces();
+  let lanIP = 'unknown';
+  for (const name of Object.keys(nets)) {
+    for (const net of nets[name]) {
+      if (net.family === 'IPv4' && !net.internal) {
+        lanIP = net.address;
+      }
+    }
+  }
   console.log(`[Rummy Backend Server] Running on port ${PORT}`);
+  console.log(`[Rummy Backend Server] Local:   http://localhost:${PORT}`);
+  console.log(`[Rummy Backend Server] Network: http://${lanIP}:${PORT}  ← Use this on your phone`);
 });

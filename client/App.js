@@ -9,7 +9,6 @@ import {
   TextInput,
   TouchableOpacity,
   Platform,
-  ActivityIndicator
 } from 'react-native';
 import { useGameStore } from './store/gameStore';
 import LobbyScreen from './screens/LobbyScreen';
@@ -19,9 +18,9 @@ import ResultsScreen from './screens/ResultsScreen';
 
 export default function App() {
   const [currentScreen, setCurrentScreen] = useState('Lobby');
-  const [serverUrl, setServerUrl] = useState('http://localhost:3000');
+  const [serverUrl, setServerUrl] = useState('https://YOUR-APP-NAME.onrender.com'); // 🔁 Replace with your Render URL
   const [showConfig, setShowConfig] = useState(false);
-  const [tempUrl, setTempUrl] = useState('http://localhost:3000');
+  const [tempUrl, setTempUrl] = useState('https://YOUR-APP-NAME.onrender.com');
 
   // Zustand Store Hooks
   const connectSocket = useGameStore(state => state.connectSocket);
@@ -76,7 +75,8 @@ export default function App() {
 
   return (
     <SafeAreaView style={styles.safeArea}>
-      <StatusBar barStyle="light-content" backgroundColor="#052314" />
+      <StatusBar barStyle="light-content" backgroundColor="#052314" translucent={false} />
+
       
       {/* 1. Global Connection and Configuration Ribbon */}
       {currentScreen === 'Lobby' && (
@@ -133,6 +133,7 @@ const styles = StyleSheet.create({
   safeArea: {
     flex: 1,
     backgroundColor: '#052314', // Match felt table color
+    paddingTop: Platform.OS === 'android' ? StatusBar.currentHeight : 0, // Fix status bar overlap on Android
   },
   statusRibbon: {
     height: 36,

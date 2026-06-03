@@ -18,9 +18,9 @@ import ResultsScreen from './screens/ResultsScreen';
 
 export default function App() {
   const [currentScreen, setCurrentScreen] = useState('Lobby');
-  const [serverUrl, setServerUrl] = useState('https://YOUR-APP-NAME.onrender.com'); // 🔁 Replace with your Render URL
+  const [serverUrl, setServerUrl] = useState('https://multiplayer-cardsgame.onrender.com');
   const [showConfig, setShowConfig] = useState(false);
-  const [tempUrl, setTempUrl] = useState('https://YOUR-APP-NAME.onrender.com');
+  const [tempUrl, setTempUrl] = useState('https://multiplayer-cardsgame.onrender.com');
 
   // Zustand Store Hooks
   const connectSocket = useGameStore(state => state.connectSocket);

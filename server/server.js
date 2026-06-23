@@ -27,6 +27,11 @@ const io = new Server(server, {
 io.on('connection', (socket) => {
   console.log(`[Socket Connected] ID: ${socket.id}`);
 
+  // Catch-all packet logger for connection troubleshooting
+  socket.onAny((eventName, ...args) => {
+    console.log(`[Socket Event] ID: ${socket.id}, Event: ${eventName}, Args:`, JSON.stringify(args));
+  });
+
   // Create Room
   socket.on('create_room', ({ username }, callback) => {
     if (!username) {
@@ -46,22 +51,7 @@ io.on('connection', (socket) => {
       });
       
       // Update room state for creator
-      io.to(socket.id).emit('game_state_update', {
-        roomCode: room.roomCode,
-        gameStarted: false,
-        roundEnded: false,
-        players: room.players.map(p => ({
-          id: p.id,
-          username: p.username,
-          isAdmin: p.isAdmin,
-          connected: p.connected,
-          score: p.score,
-          lastRoundPoints: p.lastRoundPoints,
-          declareStatus: p.declareStatus,
-          cardCount: 0,
-          cards: p.cards
-        }))
-      });
+      roomManager.broadcastRoomState(room, io);
     } catch (err) {
       console.error('Error creating room:', err);
       callback({ error: 'Server error creating room.' });
@@ -99,35 +89,7 @@ io.on('connection', (socket) => {
       }
 
       // Send current state to all players
-      // For all players, we need to send their customized state
-      for (let player of room.players) {
-        if (player.connected) {
-          io.to(player.id).emit('game_state_update', {
-            roomCode: room.roomCode,
-            gameStarted: room.gameStarted,
-            roundEnded: room.roundEnded,
-            turnIndex: room.turnIndex,
-            turnState: room.turnState,
-            timeLeft: room.timeLeft,
-            wildJokerCard: room.wildJokerCard,
-            wildJokerValue: room.wildJokerValue,
-            deckCount: room.deck.length,
-            discardPile: room.discardPile,
-            winner: room.winner,
-            players: room.players.map(p => ({
-              id: p.id,
-              username: p.username,
-              isAdmin: p.isAdmin,
-              connected: p.connected,
-              score: p.score,
-              lastRoundPoints: p.lastRoundPoints,
-              declareStatus: p.declareStatus,
-              cardCount: p.cards ? p.cards.length : 0,
-              cards: p.id === player.id ? p.cards : undefined
-            }))
-          });
-        }
-      }
+      roomManager.broadcastRoomState(room, io);
 
     } catch (err) {
       console.error('Error joining room:', err);
@@ -146,36 +108,9 @@ io.on('connection', (socket) => {
       console.log(`[Game Started] Room: ${roomCode}`);
       callback({ success: true });
 
-      // Update room state for everyone (distributed through gameLogic dealing)
+      // Update room state for everyone
       const room = result.room;
-      for (let player of room.players) {
-        if (player.connected) {
-          io.to(player.id).emit('game_state_update', {
-            roomCode: room.roomCode,
-            gameStarted: true,
-            roundEnded: false,
-            turnIndex: room.turnIndex,
-            turnState: room.turnState,
-            timeLeft: room.timeLeft,
-            wildJokerCard: room.wildJokerCard,
-            wildJokerValue: room.wildJokerValue,
-            deckCount: room.deck.length,
-            discardPile: room.discardPile,
-            winner: null,
-            players: room.players.map(p => ({
-              id: p.id,
-              username: p.username,
-              isAdmin: p.isAdmin,
-              connected: p.connected,
-              score: p.score,
-              lastRoundPoints: p.lastRoundPoints,
-              declareStatus: p.declareStatus,
-              cardCount: p.cards.length,
-              cards: p.id === player.id ? p.cards : undefined
-            }))
-          });
-        }
-      }
+      roomManager.broadcastRoomState(room, io);
     } catch (err) {
       console.error('Error starting game:', err);
       callback({ error: 'Server error starting game.' });
@@ -235,37 +170,86 @@ io.on('connection', (socket) => {
 
       // Broadcast update
       const room = result.room;
-      for (let player of room.players) {
-        if (player.connected) {
-          io.to(player.id).emit('game_state_update', {
-            roomCode: room.roomCode,
-            gameStarted: true,
-            roundEnded: false,
-            turnIndex: room.turnIndex,
-            turnState: room.turnState,
-            timeLeft: room.timeLeft,
-            wildJokerCard: room.wildJokerCard,
-            wildJokerValue: room.wildJokerValue,
-            deckCount: room.deck.length,
-            discardPile: room.discardPile,
-            winner: null,
-            players: room.players.map(p => ({
-              id: p.id,
-              username: p.username,
-              isAdmin: p.isAdmin,
-              connected: p.connected,
-              score: p.score,
-              lastRoundPoints: p.lastRoundPoints,
-              declareStatus: p.declareStatus,
-              cardCount: p.cards.length,
-              cards: p.id === player.id ? p.cards : undefined
-            }))
-          });
-        }
-      }
+      roomManager.broadcastRoomState(room, io);
     } catch (err) {
       console.error('Error restarting game:', err);
       callback({ error: 'Server error restarting game.' });
+    }
+  });
+
+  // Add Bot
+  socket.on('add_bot', ({ roomCode }, callback) => {
+    try {
+      const result = roomManager.addBot(roomCode);
+      if (result.error) {
+        return callback({ error: result.error });
+      }
+      callback({ success: true });
+
+      // Broadcast player joined status to other players
+      socket.to(result.room.roomCode).emit('player_joined', {
+        username: result.room.players[result.room.players.length - 1].username
+      });
+
+      // Broadcast updated room state
+      roomManager.broadcastRoomState(result.room, io);
+    } catch (err) {
+      console.error('Error adding bot:', err);
+      callback({ error: 'Server error adding bot.' });
+    }
+  });
+
+  // Submit Losing Hand (in scoring phase)
+  socket.on('submit_losing_hand', ({ roomCode, groups }, callback) => {
+    try {
+      const result = roomManager.submitLosingHand(roomCode, socket.id, groups, io);
+      if (result.error) {
+        return callback({ error: result.error });
+      }
+      callback({ success: true });
+    } catch (err) {
+      console.error('Error submitting losing hand:', err);
+      callback({ error: 'Server error submitting losing hand.' });
+    }
+  });
+
+  // Play with Computer (Instant Game with Bots)
+  socket.on('play_with_computer', ({ username }, callback) => {
+    if (!username) {
+      return callback({ error: 'Username is required.' });
+    }
+    try {
+      // 1. Create Room
+      const room = roomManager.createRoom(username, socket.id);
+      socket.join(room.roomCode);
+      console.log(`[Play with Computer] Room Created: ${room.roomCode} by ${username}`);
+
+      // 2. Add 2 Bots
+      roomManager.addBot(room.roomCode);
+      roomManager.addBot(room.roomCode);
+      console.log(`[Play with Computer] Added 2 bots to Room: ${room.roomCode}`);
+
+      // 3. Start Game
+      const result = roomManager.startGame(room.roomCode, socket.id, io);
+      if (result.error) {
+        return callback({ error: result.error });
+      }
+
+      console.log(`[Play with Computer] Game Started: Room ${room.roomCode}`);
+      
+      // Respond to client
+      callback({
+        success: true,
+        roomCode: room.roomCode,
+        username,
+        isAdmin: true
+      });
+
+      // Broadcast room state to creator (starts the game UI directly on client)
+      roomManager.broadcastRoomState(room, io);
+    } catch (err) {
+      console.error('Error in play_with_computer:', err);
+      callback({ error: 'Server error starting computer game.' });
     }
   });
 

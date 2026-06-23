@@ -49,6 +49,8 @@ export default function ResultsScreen({ onNavigate }) {
   const resetStore = useGameStore(state => state.resetStore);
   const socket = useGameStore(state => state.socket);
   const error = useGameStore(state => state.error);
+  const matchFinished = useGameStore(state => state.matchFinished);
+  const matchWinner = useGameStore(state => state.matchWinner);
 
   const handleNextRound = () => {
     restartGame();
@@ -88,11 +90,20 @@ export default function ResultsScreen({ onNavigate }) {
       <View style={styles.glowTop} />
       
       <View style={styles.header}>
-        <Text style={styles.congratsText}>ROUND SCOREBOARD</Text>
-        {winner ? (
-          <Text style={styles.winnerText}>🏆 {winner} Won the Round! (0 pts)</Text>
+        {matchFinished ? (
+          <>
+            <Text style={styles.congratsText}>👑 MATCH FINISHED 👑</Text>
+            <Text style={styles.matchWinnerTitle}>🏆 {matchWinner} IS THE CHAMPION! 🏆</Text>
+          </>
         ) : (
-          <Text style={styles.winnerText}>Wrong Show! Penalty Round</Text>
+          <>
+            <Text style={styles.congratsText}>ROUND SCOREBOARD</Text>
+            {winner ? (
+              <Text style={styles.winnerText}>🏆 {winner} Won the Round! (0 pts)</Text>
+            ) : (
+              <Text style={styles.winnerText}>Wrong Show! Penalty Round</Text>
+            )}
+          </>
         )}
       </View>
 
@@ -110,22 +121,23 @@ export default function ResultsScreen({ onNavigate }) {
             const isDeclareFailed = p.declareStatus === 'invalid';
             
             return (
-              <View key={p.id || idx} style={styles.tableRow}>
-                <Text style={[styles.tableCol, styles.colName, styles.rowValue]}>
-                  {p.username} {isWinner ? '👑' : ''}
+              <View key={p.id || idx} style={[styles.tableRow, p.eliminated && styles.eliminatedRow]}>
+                <Text style={[styles.tableCol, styles.colName, styles.rowValue, p.eliminated && styles.eliminatedText]}>
+                  {p.username} {isWinner ? '👑' : ''} {p.eliminated ? '❌ (ELIMINATED)' : ''}
                 </Text>
                 
                 <Text style={[
                   styles.tableCol, 
                   styles.colPoints, 
                   styles.rowValue, 
-                  isWinner ? styles.winPoints : styles.losePoints
+                  isWinner ? styles.winPoints : styles.losePoints,
+                  p.eliminated && styles.eliminatedText
                 ]}>
                   {isWinner ? '0' : `+${p.lastRoundPoints}`}
                   {isDeclareFailed ? ' (Wrong Show)' : ''}
                 </Text>
 
-                <Text style={[styles.tableCol, styles.colTotal, styles.rowValue, styles.totalPointsText]}>
+                <Text style={[styles.tableCol, styles.colTotal, styles.rowValue, styles.totalPointsText, p.eliminated && styles.eliminatedText]}>
                   {p.score} pts
                 </Text>
               </View>
@@ -146,7 +158,24 @@ export default function ResultsScreen({ onNavigate }) {
                 </Text>
               </View>
 
-              {p.cards && p.cards.length > 0 ? (
+              {p.handGroups && p.handGroups.length > 0 ? (
+                <ScrollView 
+                  horizontal={true} 
+                  showsHorizontalScrollIndicator={false}
+                  contentContainerStyle={styles.cardsRow}
+                >
+                  {p.handGroups.map((group, gIdx) => (
+                    <View key={gIdx} style={styles.miniGroupContainer}>
+                      <Text style={styles.miniGroupLabel}>G{gIdx + 1}</Text>
+                      <View style={styles.miniGroupCards}>
+                        {group.map((card, cIdx) => (
+                          <MiniCard key={card.id || cIdx} card={card} wildValue={wildJokerValue} />
+                        ))}
+                      </View>
+                    </View>
+                  ))}
+                </ScrollView>
+              ) : p.cards && p.cards.length > 0 ? (
                 <ScrollView 
                   horizontal={true} 
                   showsHorizontalScrollIndicator={false}
@@ -157,7 +186,9 @@ export default function ResultsScreen({ onNavigate }) {
                   ))}
                 </ScrollView>
               ) : (
-                <Text style={styles.noCardsRevealedText}>Cards not revealed or empty hand.</Text>
+                <Text style={styles.noCardsRevealedText}>
+                  {p.eliminated ? 'Eliminated - no cards dealt.' : 'Cards not revealed or empty hand.'}
+                </Text>
               )}
             </View>
           );
@@ -170,10 +201,14 @@ export default function ResultsScreen({ onNavigate }) {
         <View style={styles.actionContainer}>
           {isAdmin ? (
             <TouchableOpacity style={styles.nextRoundBtn} onPress={handleNextRound}>
-              <Text style={styles.nextRoundBtnText}>Deal Next Round</Text>
+              <Text style={styles.nextRoundBtnText}>
+                {matchFinished ? 'Start New Match' : 'Deal Next Round'}
+              </Text>
             </TouchableOpacity>
           ) : (
-            <Text style={styles.waitingHostText}>Waiting for Host to deal next round...</Text>
+            <Text style={styles.waitingHostText}>
+              {matchFinished ? 'Waiting for Host to start new match...' : 'Waiting for Host to deal next round...'}
+            </Text>
           )}
 
           <TouchableOpacity style={styles.leaveBtn} onPress={handleLeave}>
@@ -189,6 +224,8 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: '#1b0e06', // Wooden floor color
+    paddingLeft: Platform.OS === 'android' ? 32 : 16,
+    paddingRight: Platform.OS === 'android' ? 32 : 16,
     ...Platform.select({
       web: {
         backgroundImage: 'linear-gradient(90deg, rgba(0,0,0,0.15) 1px, transparent 1px)',
@@ -453,5 +490,42 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '700',
     letterSpacing: 0.5,
+  },
+  eliminatedRow: {
+    opacity: 0.55,
+    backgroundColor: 'rgba(255, 0, 0, 0.05)',
+  },
+  eliminatedText: {
+    color: '#8AAB99',
+    textDecorationLine: 'line-through',
+  },
+  matchWinnerTitle: {
+    fontSize: 22,
+    fontWeight: '900',
+    color: '#E5C158',
+    marginTop: 6,
+    textShadowColor: 'rgba(0, 0, 0, 0.75)',
+    textShadowOffset: { width: -1, height: 1 },
+    textShadowRadius: 10,
+    textAlign: 'center',
+  },
+  miniGroupContainer: {
+    backgroundColor: 'rgba(255, 255, 255, 0.05)',
+    borderRadius: 8,
+    padding: 6,
+    marginRight: 10,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.1)',
+    alignItems: 'center',
+    minWidth: 46,
+  },
+  miniGroupLabel: {
+    fontSize: 9,
+    fontWeight: 'bold',
+    color: '#8AAB99',
+    marginBottom: 4,
+  },
+  miniGroupCards: {
+    flexDirection: 'row',
   }
 });

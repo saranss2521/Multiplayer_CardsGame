@@ -60,8 +60,21 @@ export default function WaitingRoomScreen({ onNavigate }) {
     if (socket) {
       socket.disconnect(); // Disconnect automatically triggers removal
     }
+    const { resetStore, connectSocket } = useGameStore.getState();
     resetStore();
+    const serverUrl = useGameStore.getState().socket?.io?.uri || 'https://multiplayer-cardsgame.onrender.com';
+    connectSocket(serverUrl);
     onNavigate('Lobby');
+  };
+
+  const handleAddComputer = () => {
+    if (socket && roomCode) {
+      socket.emit('add_bot', { roomCode }, (res) => {
+        if (!res.success) {
+          alert(res.error || 'Failed to add computer player.');
+        }
+      });
+    }
   };
 
   // If game is started by admin, App.js will observe state.gameStarted and auto-navigate
@@ -87,6 +100,15 @@ export default function WaitingRoomScreen({ onNavigate }) {
 
           {isLandscape && (
             <View style={styles.landscapeControls}>
+              {isAdmin && players.length < 6 && (
+                <TouchableOpacity
+                  style={[styles.startButton, styles.addComputerBtn, { marginBottom: 10 }]}
+                  onPress={handleAddComputer}
+                >
+                  <Text style={styles.addComputerBtnText}>🤖 Add Computer</Text>
+                </TouchableOpacity>
+              )}
+
               {isAdmin ? (
                 <TouchableOpacity
                   style={[styles.startButton, players.length < 2 && styles.disabledButton]}
@@ -155,6 +177,15 @@ export default function WaitingRoomScreen({ onNavigate }) {
 
           {!isLandscape && (
             <View style={styles.actionContainer}>
+              {isAdmin && players.length < 6 && (
+                <TouchableOpacity
+                  style={[styles.startButton, styles.addComputerBtn, { marginBottom: 10 }]}
+                  onPress={handleAddComputer}
+                >
+                  <Text style={styles.addComputerBtnText}>🤖 Add Computer</Text>
+                </TouchableOpacity>
+              )}
+
               {isAdmin ? (
                 <TouchableOpacity
                   style={[styles.startButton, players.length < 2 && styles.disabledButton]}
@@ -474,5 +505,15 @@ const styles = StyleSheet.create({
   },
   landscapeLeaveButton: {
     marginTop: 15,
+  },
+  addComputerBtn: {
+    backgroundColor: '#385C48',
+    borderColor: '#8AAB99',
+    borderWidth: 1,
+  },
+  addComputerBtnText: {
+    color: '#FFF',
+    fontSize: 16,
+    fontWeight: '700',
   }
 });

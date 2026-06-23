@@ -14,26 +14,10 @@ import {
 } from 'react-native';
 import { useGameStore } from '../store/gameStore';
 import Card from '../components/Card';
+import { playSoundEffect } from '../utils/audio';
 
 const playSound = (url) => {
-  let finalUrl = url;
-  if (url.includes('button-16')) {
-    finalUrl = 'https://cdn.jsdelivr.net/gh/UnknownEnergy/solitaire@master/card-flip.mp3';
-  } else if (url.includes('card-flip-1')) {
-    finalUrl = 'https://cdn.jsdelivr.net/gh/UnknownEnergy/solitaire@master/card-flip.mp3';
-  } else if (url.includes('card-deal-1')) {
-    finalUrl = 'https://cdn.jsdelivr.net/gh/UnknownEnergy/solitaire@master/card-place.mp3';
-  } else if (url.includes('card-shuffle-1')) {
-    finalUrl = 'https://cdn.jsdelivr.net/gh/datturbomoon/Mystic-Draw@master/shuffle.mp3';
-  } else if (url.includes('bell-ringing-05')) {
-    finalUrl = 'https://cdn.jsdelivr.net/gh/cferdinandi/ding@master/ding.mp3';
-  }
-
-  if (Platform.OS === 'web' && typeof Audio !== 'undefined') {
-    const audio = new Audio(finalUrl);
-    audio.volume = 0.45;
-    audio.play().catch((err) => console.log("Sound play blocked:", err));
-  }
+  playSoundEffect(url);
 };
 
 export default function GameScreen({ onNavigate }) {
@@ -66,6 +50,15 @@ export default function GameScreen({ onNavigate }) {
   const discardCard = useGameStore(state => state.discardCard);
   const declareGame = useGameStore(state => state.declareGame);
   const setDeclaringMode = useGameStore(state => state.setDeclaringMode);
+  
+  // Custom Controls & Scoring Phase
+  const soundMuted = useGameStore(state => state.soundMuted);
+  const toggleSoundMute = useGameStore(state => state.toggleSoundMute);
+  const scoringActive = useGameStore(state => state.scoringActive);
+  const scoringWinner = useGameStore(state => state.scoringWinner);
+  const scoringTimeLeft = useGameStore(state => state.scoringTimeLeft);
+  const hasSubmittedLosingHand = useGameStore(state => state.hasSubmittedLosingHand);
+  const submitLosingHand = useGameStore(state => state.submitLosingHand);
   
   const socket = useGameStore(state => state.socket);
 
@@ -126,8 +119,31 @@ export default function GameScreen({ onNavigate }) {
     });
   };
 
+  const handleExitGame = () => {
+    Alert.alert(
+      'Exit Game',
+      'Are you sure you want to leave the game? You will forfeit the current round.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { 
+          text: 'Exit', 
+          style: 'destructive',
+          onPress: () => {
+            if (socket) {
+              socket.disconnect();
+            }
+            const { resetStore, connectSocket } = useGameStore.getState();
+            resetStore();
+            const serverUrl = useGameStore.getState().socket?.io?.uri || 'https://multiplayer-cardsgame.onrender.com';
+            connectSocket(serverUrl);
+            onNavigate('Lobby');
+          }
+        }
+      ]
+    );
+  };
+
   const handleDragStart = () => {
-    playSound('https://www.soundjay.com/misc/sounds/card-flip-1.mp3');
     measureAllZones();
   };
 
@@ -215,8 +231,17 @@ export default function GameScreen({ onNavigate }) {
 
   // Find index of current client player in players array
   const myIndex = players.findIndex(p => p.username === username);
-  const isActiveTurn = turnIndex === myIndex;
+  const myPlayer = players[myIndex];
+  const isEliminated = myPlayer ? myPlayer.eliminated : false;
+  const isActiveTurn = turnIndex === myIndex && !isEliminated;
   const totalCardsInHand = myHandGroups.flat().length;
+
+  // Turn chime trigger
+  React.useEffect(() => {
+    if (gameStarted && !roundEnded && isActiveTurn) {
+      playSound('https://www.soundjay.com/misc/sounds/bell-ringing-05.mp3');
+    }
+  }, [isActiveTurn, gameStarted, roundEnded]);
 
   const topDiscardCard = discardPile.length > 0 ? discardPile[discardPile.length - 1] : null;
 
@@ -329,11 +354,31 @@ export default function GameScreen({ onNavigate }) {
       <View style={styles.tableRim}>
         {/* 3. Green Felt Inner Playground */}
         <View style={styles.feltTable}>
+          {/* 1b. Table Controls Bar (Mute & Exit) */}
+          <View style={styles.gameControlsHeader}>
+            <TouchableOpacity 
+              activeOpacity={0.7}
+              style={styles.controlBtn} 
+              onPress={() => toggleSoundMute()}
+            >
+              <Text style={styles.controlBtnText}>{soundMuted ? '🔇' : '🔊'}</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity 
+              activeOpacity={0.7}
+              style={[styles.controlBtn, styles.exitGameBtn]} 
+              onPress={handleExitGame}
+            >
+              <Text style={styles.exitBtnText}>Exit</Text>
+            </TouchableOpacity>
+          </View>
+
           {/* 1. Opponent Bar (Floated absolutely at the top) */}
           <View style={styles.opponentsCompactHeader}>
             {players.map((player, idx) => {
               const isPlayerTurn = turnIndex === idx;
               const isMe = idx === myIndex;
+              const playerEliminated = player.eliminated;
               
               return (
                 <View 
@@ -341,29 +386,38 @@ export default function GameScreen({ onNavigate }) {
                   style={[
                     styles.playerAvatarContainer,
                     isPlayerTurn && styles.activePlayerBorder,
-                    !player.connected && styles.disconnectedPlayerBorder
+                    !player.connected && styles.disconnectedPlayerBorder,
+                    playerEliminated && styles.eliminatedAvatarBorder
                   ]}
                 >
-                  <View style={[styles.avatarCircle, isMe && styles.meAvatarCircle]}>
+                  <View style={[
+                    styles.avatarCircle, 
+                    isMe && styles.meAvatarCircle,
+                    playerEliminated && styles.eliminatedAvatarCircle
+                  ]}>
                     <Text style={styles.avatarLetter}>
-                      {player.username.charAt(0).toUpperCase()}
+                      {playerEliminated ? '❌' : player.username.charAt(0).toUpperCase()}
                     </Text>
                   </View>
                   
                   <Text 
                     numberOfLines={1} 
-                    style={[styles.playerText, isPlayerTurn && styles.activePlayerText]}
+                    style={[
+                      styles.playerText, 
+                      isPlayerTurn && styles.activePlayerText,
+                      playerEliminated && styles.eliminatedPlayerText
+                    ]}
                   >
                     {player.username}
                   </Text>
                   
-                  <Text style={styles.cardCountText}>
-                    🂠 {isMe ? totalCardsInHand : player.cardCount}
+                  <Text style={[styles.cardCountText, playerEliminated && styles.eliminatedPlayerText]}>
+                    {playerEliminated ? 'ELIM' : `🂠 ${isMe ? totalCardsInHand : player.cardCount}`}
                   </Text>
                   
-                  {!player.connected ? (
+                  {!player.connected && !playerEliminated ? (
                     <Text style={styles.disconnectedText}>OFF</Text>
-                  ) : isPlayerTurn ? (
+                  ) : isPlayerTurn && !playerEliminated ? (
                     <Text style={styles.turnTimerTick}>{timeLeft}s</Text>
                   ) : null}
                 </View>
@@ -390,6 +444,17 @@ export default function GameScreen({ onNavigate }) {
               >
                 <Text style={styles.cancelDeclareBtnText}>Cancel</Text>
               </TouchableOpacity>
+            </View>
+          ) : null}
+
+          {/* Active Turn Banner (moved to bottom) */}
+
+          {/* Scoring Phase Banner */}
+          {scoringActive && !roundEnded ? (
+            <View style={styles.scoringBanner}>
+              <Text style={styles.scoringBannerText}>
+                ⚠️ SCORING PHASE: {scoringWinner} declared show! Arrange cards & submit in {scoringTimeLeft}s
+              </Text>
             </View>
           ) : null}
 
@@ -478,9 +543,26 @@ export default function GameScreen({ onNavigate }) {
             </View>
 
           </View>
+ 
+          {/* Active Turn Banner */}
+          {isActiveTurn && !isDeclaring && !roundEnded && !scoringActive ? (
+            <View style={styles.turnBanner}>
+              <Text style={styles.turnBannerText}>
+                🟢 YOUR TURN: {turnState === 'draw' ? 'Draw' : 'Discard/Declare'}
+              </Text>
+            </View>
+          ) : null}
 
           {/* 4. Controls and Player's Hand Row */}
-          <View style={styles.handAreaContainer}>
+          {isEliminated ? (
+            <View style={styles.eliminatedOverlay}>
+              <Text style={styles.eliminatedOverlayText}>❌ ELIMINATED</Text>
+              <Text style={styles.eliminatedOverlaySubtext}>
+                You reached or exceeded 240 points. You are now spectating this match.
+              </Text>
+            </View>
+          ) : (
+            <View style={styles.handAreaContainer}>
             
             {/* Left Hand side Utility controls */}
             <View style={styles.sideControlsColumn}>
@@ -557,7 +639,8 @@ export default function GameScreen({ onNavigate }) {
                             card={card}
                             isSelected={isSelected}
                             isWildJoker={isWild}
-                            onPress={() => handleCardPress(card)}
+                            onPress={hasSubmittedLosingHand ? undefined : () => handleCardPress(card)}
+                            dragEnabled={!hasSubmittedLosingHand}
                             onDragStart={handleDragStart}
                             onDragRelease={handleDragRelease}
                             style={!isLast ? { marginRight: -42 } : { marginRight: 0 }}
@@ -572,7 +655,24 @@ export default function GameScreen({ onNavigate }) {
 
             {/* Right Hand side Action controls */}
             <View style={styles.sideControlsColumn}>
-              {isActiveTurn && !isDeclaring ? (
+              {scoringActive ? (
+                hasSubmittedLosingHand ? (
+                  <View style={styles.submittedBubble}>
+                    <Text style={styles.submittedBubbleText}>Submitted</Text>
+                  </View>
+                ) : (
+                  <TouchableOpacity 
+                    style={[styles.sideControlBtn, styles.submitHandBtn]} 
+                    onPress={() => {
+                      playSound('https://www.soundjay.com/misc/sounds/card-deal-1.mp3');
+                      submitLosingHand();
+                    }}
+                  >
+                    <Text style={styles.sideControlBtnTextDark}>Submit</Text>
+                    <Text style={styles.sideControlBtnTextDarkSub}>Hand</Text>
+                  </TouchableOpacity>
+                )
+              ) : isActiveTurn && !isDeclaring ? (
                 <View style={styles.activeTurnControls}>
                   {turnState === 'draw' ? (
                     <View style={styles.turnBubble}>
@@ -615,6 +715,7 @@ export default function GameScreen({ onNavigate }) {
             </View>
 
           </View>
+          )}
 
         </View>
       </View>
@@ -725,7 +826,10 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: '#1b0e06', // Wooden floor background color
-    padding: 2, // Minimal outer padding
+    paddingLeft: Platform.OS === 'android' ? 32 : 2,
+    paddingRight: Platform.OS === 'android' ? 32 : 2,
+    paddingTop: 2,
+    paddingBottom: Platform.OS === 'android' ? 24 : 6, // Elevate layout above Android virtual navigation bar
     flexDirection: 'column',
     ...Platform.select({
       web: {
@@ -738,7 +842,7 @@ const styles = StyleSheet.create({
     position: 'absolute',
     top: 4,
     left: 20,
-    right: 20,
+    right: 140,
     height: 26, // Low-profile height
     flexDirection: 'row',
     justifyContent: 'space-around',
@@ -1257,5 +1361,129 @@ const styles = StyleSheet.create({
     color: '#052F1A',
     fontSize: 13,
     fontWeight: 'bold',
+  },
+  gameControlsHeader: {
+    position: 'absolute',
+    top: 4,
+    right: 20,
+    width: 110,
+    height: 26,
+    flexDirection: 'row',
+    justifyContent: 'space-around',
+    alignItems: 'center',
+    backgroundColor: 'rgba(0, 0, 0, 0.55)',
+    borderRadius: 14,
+    paddingHorizontal: 4,
+    borderColor: 'rgba(255, 255, 255, 0.06)',
+    borderWidth: 1,
+    zIndex: 10,
+  },
+  controlBtn: {
+    paddingVertical: 2,
+    paddingHorizontal: 8,
+    borderRadius: 6,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  exitGameBtn: {
+    backgroundColor: '#9e2a2b',
+  },
+  exitBtnText: {
+    color: '#FFF',
+    fontSize: 9,
+    fontWeight: 'bold',
+  },
+  controlBtnText: {
+    fontSize: 11,
+  },
+  turnBanner: {
+    backgroundColor: '#385C48',
+    paddingVertical: 5,
+    borderRadius: 8,
+    alignItems: 'center',
+    marginBottom: 6,
+    borderColor: '#2CE57F',
+    borderWidth: 1,
+  },
+  turnBannerText: {
+    color: '#FFF',
+    fontSize: 10,
+    fontWeight: 'bold',
+    letterSpacing: 0.5,
+  },
+  scoringBanner: {
+    backgroundColor: '#a32f30',
+    paddingVertical: 5,
+    borderRadius: 8,
+    alignItems: 'center',
+    marginBottom: 6,
+    borderColor: '#FF6B6B',
+    borderWidth: 1,
+  },
+  scoringBannerText: {
+    color: '#FFF',
+    fontSize: 10,
+    fontWeight: 'bold',
+    letterSpacing: 0.5,
+  },
+  submitHandBtn: {
+    backgroundColor: '#E5C158',
+  },
+  sideControlBtnTextDarkSub: {
+    fontSize: 9,
+    color: '#052314',
+    fontWeight: 'bold',
+    marginTop: 1,
+  },
+  submittedBubble: {
+    backgroundColor: 'rgba(255,255,255,0.1)',
+    borderColor: 'rgba(255,255,255,0.2)',
+    borderWidth: 1,
+    paddingVertical: 10,
+    paddingHorizontal: 8,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  submittedBubbleText: {
+    color: '#8AAB99',
+    fontSize: 11,
+    fontWeight: 'bold',
+  },
+  eliminatedOverlay: {
+    flex: 1.5,
+    backgroundColor: 'rgba(139, 0, 0, 0.25)',
+    borderRadius: 16,
+    borderWidth: 2,
+    borderColor: 'rgba(255, 107, 107, 0.4)',
+    marginHorizontal: 12,
+    marginVertical: 6,
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 16,
+  },
+  eliminatedOverlayText: {
+    fontSize: 18,
+    fontWeight: '900',
+    color: '#FF6B6B',
+    letterSpacing: 1.5,
+    marginBottom: 6,
+  },
+  eliminatedOverlaySubtext: {
+    fontSize: 11,
+    color: '#A2C2B2',
+    textAlign: 'center',
+    fontWeight: '600',
+  },
+  eliminatedAvatarBorder: {
+    borderColor: 'rgba(255, 0, 0, 0.2)',
+    opacity: 0.5,
+  },
+  eliminatedAvatarCircle: {
+    backgroundColor: '#300a0a',
+  },
+  eliminatedPlayerText: {
+    color: '#888',
+    textDecorationLine: 'line-through',
   }
 });

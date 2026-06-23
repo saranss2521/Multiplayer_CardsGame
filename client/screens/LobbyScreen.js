@@ -25,6 +25,7 @@ export default function LobbyScreen({ onNavigate }) {
 
   const createRoom = useGameStore(state => state.createRoom);
   const joinRoom = useGameStore(state => state.joinRoom);
+  const playWithComputer = useGameStore(state => state.playWithComputer);
   const error = useGameStore(state => state.error);
   const clearError = useGameStore(state => state.clearError);
 
@@ -57,6 +58,26 @@ export default function LobbyScreen({ onNavigate }) {
       setLoading(false);
       if (res.success) {
         onNavigate('WaitingRoom');
+      }
+    });
+  };
+
+  const handlePlayWithComputer = () => {
+    if (!name.trim()) {
+      setLocalErr('Please enter a username first.');
+      return;
+    }
+    enterFullscreen();
+    setLocalErr('');
+    clearError();
+    setLoading(true);
+
+    playWithComputer(name.trim(), (res) => {
+      setLoading(false);
+      if (res.success) {
+        // App.js handles navigation automatically because gameStarted is now true
+      } else {
+        setLocalErr(res.error || 'Failed to start game with computer.');
       }
     });
   };
@@ -131,13 +152,27 @@ export default function LobbyScreen({ onNavigate }) {
             ) : null}
 
             {loading ? (
-              <ActivityIndicator size="large" color="#E5C158" style={styles.loader} />
+              <View style={styles.loadingContainer}>
+                <ActivityIndicator size="large" color="#E5C158" style={styles.loader} />
+                <TouchableOpacity style={styles.cancelBtn} onPress={() => setLoading(false)}>
+                  <Text style={styles.cancelBtnText}>Cancel</Text>
+                </TouchableOpacity>
+              </View>
             ) : (
               <View style={styles.actionContainer}>
                 {/* Create Room Button */}
                 <TouchableOpacity style={styles.createButton} onPress={handleCreate}>
                   <Text style={styles.createButtonText}>Create New Room</Text>
                   <Text style={styles.buttonSubtext}>(You will be Host)</Text>
+                </TouchableOpacity>
+
+                {/* Play with Computer Button */}
+                <TouchableOpacity 
+                  style={[styles.createButton, styles.computerBtn, { marginTop: 10 }]} 
+                  onPress={handlePlayWithComputer}
+                >
+                  <Text style={styles.computerButtonText}>🤖 Play with Computer</Text>
+                  <Text style={styles.computerButtonSubtext}>(Start instant game with bots)</Text>
                 </TouchableOpacity>
 
                 <View style={styles.dividerContainer}>
@@ -311,6 +346,21 @@ const styles = StyleSheet.create({
   actionContainer: {
     width: '100%',
   },
+  computerBtn: {
+    backgroundColor: '#E5C158',
+    borderColor: 'rgba(0,0,0,0.1)',
+  },
+  computerButtonText: {
+    color: '#052314',
+    fontSize: 16,
+    fontWeight: '700',
+    letterSpacing: 0.5,
+  },
+  computerButtonSubtext: {
+    fontSize: 10,
+    color: 'rgba(5, 35, 20, 0.7)',
+    marginTop: 2,
+  },
   createButton: {
     backgroundColor: '#1E6B47', // Felt green accent button
     borderColor: 'rgba(255, 255, 255, 0.1)',
@@ -403,5 +453,24 @@ const styles = StyleSheet.create({
   },
   landscapeFooter: {
     marginTop: 20,
+  },
+  loadingContainer: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginVertical: 20,
+  },
+  cancelBtn: {
+    marginTop: 15,
+    paddingVertical: 8,
+    paddingHorizontal: 20,
+    borderRadius: 8,
+    backgroundColor: 'rgba(255, 255, 255, 0.1)',
+    borderColor: 'rgba(255, 255, 255, 0.2)',
+    borderWidth: 1,
+  },
+  cancelBtnText: {
+    color: '#FF6B6B',
+    fontWeight: 'bold',
+    fontSize: 14,
   }
 });

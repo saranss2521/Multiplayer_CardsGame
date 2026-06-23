@@ -3,7 +3,9 @@ const {
   createDeck,
   shuffle,
   validateDeclare,
-  calculateHandScore
+  calculateHandScore,
+  isJoker,
+  getCardPoints
 } = require('./gameLogic');
 
 // Map of roomCode -> roomState
@@ -49,19 +51,44 @@ function getSanitizedRoomState(room, requestSocketId) {
     deckCount: room.deck.length,
     discardPile: room.discardPile,
     winner: room.winner,
+    scoringActive: room.scoringActive || false,
+    scoringWinner: room.scoringWinner || null,
+    scoringTimeLeft: room.scoringTimeLeft || 0,
+    matchFinished: room.matchFinished || false,
+    matchWinner: room.matchWinner || null,
     players: room.players.map(p => ({
       id: p.id,
       username: p.username,
       isAdmin: p.isAdmin,
       connected: p.connected,
+      isBot: p.isBot || false,
       score: p.score,
       lastRoundPoints: p.lastRoundPoints,
       declareStatus: p.declareStatus,
+      eliminated: p.eliminated || false,
       // Only show card counts for other players, unless the round has ended
       cardCount: p.cards ? p.cards.length : 0,
-      cards: (p.id === requestSocketId || room.roundEnded) ? p.cards : undefined
+      cards: (p.id === requestSocketId || room.roundEnded) ? p.cards : undefined,
+      handGroups: (p.id === requestSocketId || room.roundEnded) ? p.handGroups : undefined
     }))
   };
+}
+
+/**
+ * Advances the room's turnIndex to the next active (non-eliminated) player
+ */
+function moveToNextActivePlayer(room) {
+  const startIdx = room.turnIndex;
+  let nextIdx = startIdx;
+  do {
+    nextIdx = (nextIdx + 1) % room.players.length;
+    const p = room.players[nextIdx];
+    if (p && !p.eliminated) {
+      room.turnIndex = nextIdx;
+      return;
+    }
+  } while (nextIdx !== startIdx);
+  room.turnIndex = nextIdx;
 }
 
 /**
@@ -70,6 +97,13 @@ function getSanitizedRoomState(room, requestSocketId) {
 function startTurnTimer(room, io) {
   if (room.timerId) {
     clearInterval(room.timerId);
+  }
+
+  // If the active player is a bot, trigger its turn and return
+  const activePlayer = room.players[room.turnIndex];
+  if (activePlayer && activePlayer.isBot) {
+    triggerBotTurn(room, activePlayer, io);
+    return;
   }
 
   room.timeLeft = TURN_TIMEOUT_SECONDS;
@@ -125,7 +159,7 @@ function handleTurnTimeout(room, io) {
       room.discardPile.push(discardedCard);
 
       // Advance turn
-      room.turnIndex = (room.turnIndex + 1) % room.players.length;
+      moveToNextActivePlayer(room);
       room.turnState = 'draw';
 
       io.to(room.roomCode).emit('card_discarded', {
@@ -138,7 +172,7 @@ function handleTurnTimeout(room, io) {
       room.discardPile.push(discardedCard);
 
       // Advance turn
-      room.turnIndex = (room.turnIndex + 1) % room.players.length;
+      moveToNextActivePlayer(room);
       room.turnState = 'draw';
 
       io.to(room.roomCode).emit('card_discarded', {
@@ -171,7 +205,7 @@ function recycleDiscardPile(room) {
  */
 function broadcastRoomState(room, io) {
   for (let player of room.players) {
-    if (player.connected) {
+    if (player.connected && !player.isBot) {
       io.to(player.id).emit('game_state_update', getSanitizedRoomState(room, player.id));
     }
   }
@@ -193,6 +227,8 @@ function createRoom(username, socketId) {
       score: 0,
       lastRoundPoints: 0,
       declareStatus: 'pending',
+      eliminated: false,
+      handGroups: [],
       cards: []
     }],
     deck: [],
@@ -258,6 +294,8 @@ function joinRoom(roomCode, username, socketId) {
     score: 0,
     lastRoundPoints: 0,
     declareStatus: 'pending',
+    eliminated: false,
+    handGroups: [],
     cards: []
   };
 
@@ -279,24 +317,39 @@ function startGame(roomCode, socketId, io) {
     return { error: 'At least 2 players are required to start the game.' };
   }
 
+  const wasGameNotStarted = !room.gameStarted;
+
   // Reset round settings
   room.gameStarted = true;
   room.roundEnded = false;
   room.winner = null;
   room.turnState = 'draw';
-  room.turnIndex = 0;
+
+  // Reset tournament/match levels if match is finished or starting for the first time
+  if (room.matchFinished || wasGameNotStarted) {
+    room.matchFinished = false;
+    room.matchWinner = null;
+    for (let p of room.players) {
+      p.score = 0;
+      p.eliminated = false;
+      p.handGroups = [];
+    }
+  }
 
   // 1. Create and shuffle 108 cards (2 decks + 4 jokers)
   const fullDeck = createDeck();
   room.deck = shuffle(fullDeck);
 
-  // 2. Deal 13 cards to each player
+  // 2. Deal 13 cards to each player (who is not eliminated)
   for (let p of room.players) {
     p.cards = [];
-    p.declareStatus = 'pending';
+    p.declareStatus = p.eliminated ? 'eliminated' : 'pending';
     p.lastRoundPoints = 0;
-    for (let i = 0; i < 13; i++) {
-      p.cards.push(room.deck.pop());
+    p.handGroups = []; // Reset groups for the round
+    if (!p.eliminated) {
+      for (let i = 0; i < 13; i++) {
+        p.cards.push(room.deck.pop());
+      }
     }
   }
 
@@ -311,6 +364,10 @@ function startGame(roomCode, socketId, io) {
 
   // 4. Open Discard Pile
   room.discardPile = [room.deck.pop()];
+
+  // Set first active player turnIndex
+  let firstActiveIdx = room.players.findIndex(p => !p.eliminated);
+  room.turnIndex = firstActiveIdx !== -1 ? firstActiveIdx : 0;
 
   // Start turn timer
   startTurnTimer(room, io);
@@ -380,7 +437,7 @@ function discardCard(roomCode, socketId, cardId, io) {
   room.discardPile.push(card);
 
   // Transition to next player turn
-  room.turnIndex = (room.turnIndex + 1) % room.players.length;
+  moveToNextActivePlayer(room);
   room.turnState = 'draw';
 
   io.to(room.roomCode).emit('card_discarded', {
@@ -439,38 +496,70 @@ function declareHand(roomCode, socketId, groups, discardCardId, io) {
     // SUCCESS DECLARE - Player wins the round
     console.log(`[Valid Declare] Player ${activePlayer.username} won the round in room ${room.roomCode}!`);
     room.winner = activePlayer.username;
-    room.roundEnded = true;
     activePlayer.declareStatus = 'valid';
     activePlayer.lastRoundPoints = 0;
+    activePlayer.handGroups = groups; // Save winner groups
 
-    // Calculate score points for other players
+    // Put declare card on top of discard pile
+    room.discardPile.push(declareCard);
+
+    // Stop normal turn timer
+    if (room.timerId) {
+      clearInterval(room.timerId);
+      room.timerId = null;
+    }
+
+    // Start 30-second Scoring Phase
+    room.scoringWinner = activePlayer.username;
+    room.scoringActive = true;
+    room.scoringTimeLeft = 30;
+
+    // Initialize declareStatus for other players
     for (let p of room.players) {
       if (p.id !== socketId) {
-        // Evaluate other player's cards. Since they are losing, we evaluate their hand.
-        // For standard games, client sends their groups to calculate, or we calculate based on server-side cards.
-        // Since players arrange their cards locally, we can score them.
-        // Wait, how do we score the losing players?
-        // We will default their groups to whatever cards they currently hold.
-        // If they did not group them, we treat them as one single ungrouped array of 13 cards,
-        // which will automatically trigger an 80 points penalty because it has no sequences.
-        // Let's implement scoring: we'll check if they have groups. If they have no grouped cards,
-        // they get 80 points.
-        // (Usually, on a declare, the server prompts other players to submit their groupings within 15 seconds,
-        // or we can auto-score them based on their current arrangement. To keep the gameplay simple and immediate,
-        // we will evaluate their current hand. If they have grouped cards stored on the server, we use that.
-        // Otherwise, we evaluate their hand as a single invalid group, resulting in 80 points).
-        // Let's check: we can calculate point scores based on their hand. If they don't have two sequences, it is 80 points.
-        // If they do have a sequence, we check their groupings if they sorted them, or we look for any sequences in their raw hand.
-        // Let's make a smart utility that extracts sequences automatically from their hand to save them points if possible,
-        // or just calculate it using their current groups (which we can store on each discard/move).
-        // Let's see: since we want to be accurate, we can check if they have sequences in their cards.
-        const defaultGroups = [p.cards];
-        const points = calculateHandScore(defaultGroups, room.wildJokerValue);
-        p.lastRoundPoints = points;
-        p.score += points;
-        p.declareStatus = 'pending';
+        p.declareStatus = p.eliminated ? 'eliminated' : 'pending';
       }
     }
+
+    room.scoringTimerId = setInterval(() => {
+      room.scoringTimeLeft--;
+      io.to(room.roomCode).emit('scoring_timer_tick', { timeLeft: room.scoringTimeLeft });
+
+      if (room.scoringTimeLeft <= 0) {
+        clearInterval(room.scoringTimerId);
+        room.scoringTimerId = null;
+        endScoringPhase(room, io);
+      }
+    }, 1000);
+
+    // Trigger auto-submission for bots after a short delay
+    for (let p of room.players) {
+      if (p.isBot && p.username !== room.scoringWinner && !p.eliminated) {
+        setTimeout(() => {
+          if (room.scoringActive) {
+            const botGroups = arrangeHandIntoGroups(p.cards, room.wildJokerValue);
+            submitLosingHand(room.roomCode, p.id, botGroups, io);
+          }
+        }, 1000);
+      }
+    }
+
+    // Check if everyone has already submitted (e.g., in bot-only lobbies or small lobbies)
+    if (checkAllLosingHandsSubmitted(room)) {
+      if (room.scoringTimerId) {
+        clearInterval(room.scoringTimerId);
+        room.scoringTimerId = null;
+      }
+      setTimeout(() => {
+        if (room.scoringActive) {
+          endScoringPhase(room, io);
+        }
+      }, 1000);
+    }
+
+    // Update room state
+    broadcastRoomState(room, io);
+    return { success: true, valid: true };
   } else {
     // FAILED DECLARE - Wrong Show (80 points penalty)
     console.log(`[Invalid Declare] Player ${activePlayer.username} failed declare: ${validation.reason}`);
@@ -479,35 +568,46 @@ function declareHand(roomCode, socketId, groups, discardCardId, io) {
     activePlayer.declareStatus = 'invalid';
     activePlayer.lastRoundPoints = 80;
     activePlayer.score += 80;
+    activePlayer.handGroups = groups; // Save wrong show groups
 
     // Refund the declare card back to the hand so we can show their cards correctly
     activePlayer.cards.push(declareCard);
 
-    // Calculate score points for other players (they get points for their current hands, but wait!
-    // If the declare is invalid, does the round end? Yes, the round ends, but other players get points based on their current hands).
+    // Put declare card on top of discard pile
+    room.discardPile.push(declareCard);
+
+    // Calculate score points for other players (they get points for their current hands, but auto-grouped for fairness)
     for (let p of room.players) {
       if (p.id !== socketId) {
-        const defaultGroups = [p.cards];
-        const points = calculateHandScore(defaultGroups, room.wildJokerValue);
-        p.lastRoundPoints = points;
-        p.score += points;
-        p.declareStatus = 'pending';
+        if (p.eliminated) {
+          p.lastRoundPoints = 0;
+          p.handGroups = [];
+          p.declareStatus = 'eliminated';
+        } else {
+          const bestGroups = arrangeHandIntoGroups(p.cards, room.wildJokerValue);
+          const points = calculateHandScore(bestGroups, room.wildJokerValue);
+          p.lastRoundPoints = points;
+          p.score += points;
+          p.declareStatus = 'pending';
+          p.handGroups = bestGroups;
+        }
       }
     }
+
+    // Stop turn timer
+    if (room.timerId) {
+      clearInterval(room.timerId);
+      room.timerId = null;
+    }
+
+    // Run tournament level elimination checking
+    checkMatchEliminations(room);
+
+    // Update room state
+    broadcastRoomState(room, io);
+
+    return { success: true, valid: false, reason: validation.reason };
   }
-
-  // Put declare card on top of discard pile
-  room.discardPile.push(declareCard);
-
-  // Stop timer
-  if (room.timerId) {
-    clearInterval(room.timerId);
-  }
-
-  // Update room state
-  broadcastRoomState(room, io);
-
-  return { success: true, valid: validation.valid, reason: validation.reason };
 }
 
 function restartGame(roomCode, socketId, io) {
@@ -536,6 +636,17 @@ function handleDisconnect(socketId, io) {
   console.log(`[Player Disconnected] ${player.username} from room ${roomCode}`);
   player.connected = false;
   socketToRoom.delete(socketId);
+
+  // If game is active and in scoring phase, check if this disconnect allows scoring phase to end
+  if (room.scoringActive) {
+    if (checkAllLosingHandsSubmitted(room)) {
+      if (room.scoringTimerId) {
+        clearInterval(room.scoringTimerId);
+        room.scoringTimerId = null;
+      }
+      endScoringPhase(room, io);
+    }
+  }
 
   // If game is not started, we can remove the player immediately
   if (!room.gameStarted) {
@@ -578,9 +689,10 @@ function handleDisconnect(socketId, io) {
       room.players[0].isAdmin = true;
     }
 
-    // If it was their turn, skip it
-    if (room.gameStarted && !room.roundEnded && room.turnIndex >= room.players.length) {
-      room.turnIndex = 0;
+    // If it was their turn, skip it or adjust active index
+    if (room.gameStarted && !room.roundEnded && (room.turnIndex >= room.players.length || room.players[room.turnIndex].eliminated)) {
+      let firstActiveIdx = room.players.findIndex(p => !p.eliminated);
+      room.turnIndex = firstActiveIdx !== -1 ? firstActiveIdx : 0;
       room.turnState = 'draw';
       startTurnTimer(room, io);
     }
@@ -596,6 +708,480 @@ function handleDisconnect(socketId, io) {
   broadcastRoomState(room, io);
 }
 
+/**
+ * Spawns a virtual player (bot) inside the room
+ */
+function addBot(roomCode) {
+  const room = rooms.get(roomCode.toUpperCase());
+  if (!room) {
+    return { error: 'Room not found.' };
+  }
+
+  if (room.gameStarted) {
+    return { error: 'The game has already started in this room.' };
+  }
+
+  if (room.players.length >= 6) {
+    return { error: 'Room is full (max 6 players).' };
+  }
+
+  const botNames = ['AlphaBot', 'BetaBot', 'GammaBot', 'DeltaBot', 'OmegaBot', 'ZetaBot', 'SigmaBot', 'KappaBot'];
+  let botName = '';
+  for (let name of botNames) {
+    if (!room.players.some(p => p.username === name)) {
+      botName = name;
+      break;
+    }
+  }
+  if (!botName) {
+    botName = `Bot_${Math.floor(Math.random() * 1000)}`;
+  }
+
+  const botId = `bot_${Math.random().toString(36).substr(2, 9)}`;
+  const botPlayer = {
+    id: botId,
+    username: botName,
+    isAdmin: false,
+    connected: true,
+    isBot: true,
+    score: 0,
+    lastRoundPoints: 0,
+    declareStatus: 'pending',
+    eliminated: false,
+    handGroups: [],
+    cards: []
+  };
+
+  room.players.push(botPlayer);
+  return { success: true, room };
+}
+
+/**
+ * Heuristic to determine if a discard card is useful to draw
+ */
+function isDiscardCardUseful(discardCard, hand, wildJokerValue) {
+  if (isJoker(discardCard, wildJokerValue)) return true;
+
+  for (let card of hand) {
+    if (isJoker(card, wildJokerValue)) continue;
+    // Set candidate
+    if (card.value === discardCard.value) return true;
+    // Sequence candidate (same suit, difference in value <= 2)
+    if (card.suit === discardCard.suit && Math.abs(card.value - discardCard.value) <= 2) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Groups a hand of cards greedily into sequences and sets
+ */
+function arrangeHandIntoGroups(cards, wildJokerValue) {
+  const jokers = [];
+  const normalCards = [];
+  for (let card of cards) {
+    if (isJoker(card, wildJokerValue)) {
+      jokers.push(card);
+    } else {
+      normalCards.push(card);
+    }
+  }
+
+  const suitGroups = { H: [], D: [], C: [], S: [] };
+  for (let card of normalCards) {
+    if (suitGroups[card.suit]) {
+      suitGroups[card.suit].push(card);
+    }
+  }
+
+  for (let suit in suitGroups) {
+    suitGroups[suit].sort((a, b) => a.value - b.value);
+  }
+
+  const finalGroups = [];
+  const remainingCards = [];
+
+  // Find pure sequences
+  for (let suit in suitGroups) {
+    const list = suitGroups[suit];
+    if (list.length === 0) continue;
+
+    let i = 0;
+    while (i < list.length) {
+      let run = [list[i]];
+      let j = i + 1;
+      while (j < list.length) {
+        const lastVal = run[run.length - 1].value;
+        const nextVal = list[j].value;
+        if (nextVal === lastVal + 1) {
+          run.push(list[j]);
+          j++;
+        } else if (nextVal === lastVal) {
+          remainingCards.push(list[j]);
+          j++;
+        } else {
+          break;
+        }
+      }
+
+      if (run.length >= 3) {
+        finalGroups.push(run);
+        i = j;
+      } else {
+        for (let c of run) {
+          remainingCards.push(c);
+        }
+        i++;
+      }
+    }
+  }
+
+  // Find sets
+  const valueGroups = {};
+  for (let card of remainingCards) {
+    if (!valueGroups[card.value]) {
+      valueGroups[card.value] = [];
+    }
+    valueGroups[card.value].push(card);
+  }
+
+  const stillRemaining = [];
+  for (let val in valueGroups) {
+    const list = valueGroups[val];
+    const uniqueSuitCards = [];
+    const suitsSeen = new Set();
+    const duplicates = [];
+    for (let card of list) {
+      if (!suitsSeen.has(card.suit)) {
+        suitsSeen.add(card.suit);
+        uniqueSuitCards.push(card);
+      } else {
+        duplicates.push(card);
+      }
+    }
+
+    if (uniqueSuitCards.length >= 3) {
+      finalGroups.push(uniqueSuitCards);
+      stillRemaining.push(...duplicates);
+    } else {
+      stillRemaining.push(...list);
+    }
+  }
+
+  // Match impure sequences using jokers
+  stillRemaining.sort((a, b) => {
+    if (a.suit !== b.suit) return a.suit.localeCompare(b.suit);
+    return a.value - b.value;
+  });
+
+  let rIdx = 0;
+  while (rIdx < stillRemaining.length - 1 && jokers.length > 0) {
+    const c1 = stillRemaining[rIdx];
+    const c2 = stillRemaining[rIdx + 1];
+    if (c1.suit === c2.suit && (c2.value - c1.value === 1 || c2.value - c1.value === 2)) {
+      const jok = jokers.pop();
+      finalGroups.push([c1, c2, jok]);
+      stillRemaining.splice(rIdx, 2);
+    } else {
+      rIdx++;
+    }
+  }
+
+  // Match impure sets using jokers
+  const valGroupsRemaining = {};
+  for (let card of stillRemaining) {
+    if (!valGroupsRemaining[card.value]) {
+      valGroupsRemaining[card.value] = [];
+    }
+    valGroupsRemaining[card.value].push(card);
+  }
+
+  for (let val in valGroupsRemaining) {
+    const list = valGroupsRemaining[val];
+    const uniqueSuitCards = [];
+    const suitsSeen = new Set();
+    for (let card of list) {
+      if (!suitsSeen.has(card.suit)) {
+        suitsSeen.add(card.suit);
+        uniqueSuitCards.push(card);
+      }
+    }
+    if (uniqueSuitCards.length === 2 && jokers.length > 0) {
+      const jok = jokers.pop();
+      finalGroups.push([...uniqueSuitCards, jok]);
+      for (let uc of uniqueSuitCards) {
+        const idx = stillRemaining.findIndex(c => c.id === uc.id);
+        if (idx !== -1) {
+          stillRemaining.splice(idx, 1);
+        }
+      }
+    }
+  }
+
+  // Distribute leftover jokers
+  while (jokers.length > 0) {
+    const jok = jokers.pop();
+    let appended = false;
+    for (let g of finalGroups) {
+      if (g.length < 4) {
+        g.push(jok);
+        appended = true;
+        break;
+      }
+    }
+    if (!appended) {
+      stillRemaining.push(jok);
+    }
+  }
+
+  // Package leftovers
+  if (stillRemaining.length > 0) {
+    finalGroups.push(stillRemaining);
+  }
+
+  return finalGroups;
+}
+
+/**
+ * Checks if a bot can declare by discarding exactly 1 card
+ */
+function checkBotCanDeclare(cards, wildJokerValue) {
+  for (let i = 0; i < cards.length; i++) {
+    const discardCard = cards[i];
+    const remainingCards = cards.filter((_, idx) => idx !== i);
+    const groups = arrangeHandIntoGroups(remainingCards, wildJokerValue);
+    const validation = validateDeclare(groups, wildJokerValue);
+    if (validation.valid) {
+      return { canDeclare: true, discardCardId: discardCard.id, groups };
+    }
+  }
+  return { canDeclare: false };
+}
+
+/**
+ * Heuristically picks the best card to discard for the bot
+ */
+function botChooseDiscard(cards, wildJokerValue) {
+  let bestCard = null;
+  let minScore = Infinity;
+  let maxDiscardPoints = -1;
+
+  for (let i = 0; i < cards.length; i++) {
+    const candidate = cards[i];
+    const candidateIsJoker = isJoker(candidate, wildJokerValue);
+
+    const remaining = cards.filter((_, idx) => idx !== i);
+    const groups = arrangeHandIntoGroups(remaining, wildJokerValue);
+    const score = calculateHandScore(groups, wildJokerValue);
+
+    const discardPoints = getCardPoints(candidate, wildJokerValue);
+
+    let isBetter = false;
+    if (score < minScore) {
+      isBetter = true;
+    } else if (score === minScore) {
+      if (bestCard) {
+        const bestIsJoker = isJoker(bestCard, wildJokerValue);
+        if (bestIsJoker && !candidateIsJoker) {
+          isBetter = true;
+        } else if (!bestIsJoker && candidateIsJoker) {
+          isBetter = false;
+        } else {
+          if (discardPoints > maxDiscardPoints) {
+            isBetter = true;
+          }
+        }
+      } else {
+        isBetter = true;
+      }
+    }
+
+    if (isBetter) {
+      minScore = score;
+      maxDiscardPoints = discardPoints;
+      bestCard = candidate;
+    }
+  }
+
+  return bestCard;
+}
+
+/**
+ * Simulates a bot player's turn (async delay, drawing, and discard/declaring)
+ */
+function triggerBotTurn(room, botPlayer, io) {
+  const activePlayer = room.players[room.turnIndex];
+  if (!activePlayer || activePlayer.id !== botPlayer.id || !room.gameStarted || room.roundEnded || room.scoringActive) {
+    return;
+  }
+
+  console.log(`[Bot Turn] Starting turn for ${botPlayer.username} in room ${room.roomCode}`);
+
+  // Step 1: Draw Card after delay
+  setTimeout(() => {
+    if (!room.gameStarted || room.roundEnded || room.scoringActive || room.players[room.turnIndex].id !== botPlayer.id) return;
+    if (room.turnState !== 'draw') return;
+
+    const topDiscardCard = room.discardPile[room.discardPile.length - 1];
+    let drawSource = 'deck';
+
+    if (topDiscardCard && isDiscardCardUseful(topDiscardCard, botPlayer.cards, room.wildJokerValue)) {
+      drawSource = 'discard';
+    }
+
+    console.log(`[Bot Turn] ${botPlayer.username} drawing from ${drawSource}`);
+    drawCard(room.roomCode, botPlayer.id, drawSource, io);
+
+    // Step 2: Discard or Declare after delay
+    setTimeout(() => {
+      if (!room.gameStarted || room.roundEnded || room.scoringActive || room.players[room.turnIndex].id !== botPlayer.id) return;
+      if (room.turnState !== 'discard') return;
+
+      const declareCheck = checkBotCanDeclare(botPlayer.cards, room.wildJokerValue);
+      if (declareCheck.canDeclare) {
+        console.log(`[Bot Turn] ${botPlayer.username} declaring!`);
+        declareHand(room.roomCode, botPlayer.id, declareCheck.groups, declareCheck.discardCardId, io);
+      } else {
+        const cardToDiscard = botChooseDiscard(botPlayer.cards, room.wildJokerValue);
+        if (cardToDiscard) {
+          console.log(`[Bot Turn] ${botPlayer.username} discarding card: ${cardToDiscard.suit}-${cardToDiscard.value}`);
+          discardCard(room.roomCode, botPlayer.id, cardToDiscard.id, io);
+        } else {
+          const fallbackCard = botPlayer.cards[botPlayer.cards.length - 1];
+          discardCard(room.roomCode, botPlayer.id, fallbackCard.id, io);
+        }
+      }
+    }, 1500);
+
+  }, 1500);
+}
+
+/**
+ * Submits the losing player's grouped cards during the scoring phase
+ */
+function submitLosingHand(roomCode, playerId, groups, io) {
+  const room = rooms.get(roomCode);
+  if (!room || !room.scoringActive) {
+    return { error: 'Scoring phase is not active.' };
+  }
+
+  const player = room.players.find(p => p.id === playerId);
+  if (!player) {
+    return { error: 'Player not found.' };
+  }
+
+  if (player.username === room.scoringWinner) {
+    return { error: 'Winner does not need to submit hand.' };
+  }
+
+  if (player.declareStatus === 'submitted') {
+    return { error: 'Hand already submitted.' };
+  }
+
+  const points = calculateHandScore(groups, room.wildJokerValue);
+  player.lastRoundPoints = points;
+  player.score += points;
+  player.declareStatus = 'submitted';
+  player.handGroups = groups; // Save losing grouped cards
+
+  console.log(`[Hand Submitted] Player ${player.username} scored ${points} points.`);
+
+  if (checkAllLosingHandsSubmitted(room)) {
+    if (room.scoringTimerId) {
+      clearInterval(room.scoringTimerId);
+      room.scoringTimerId = null;
+    }
+    endScoringPhase(room, io);
+  } else {
+    broadcastRoomState(room, io);
+  }
+
+  return { success: true };
+}
+
+/**
+ * Checks if all connected players in the lobby have submitted their losing hands
+ */
+function checkAllLosingHandsSubmitted(room) {
+  for (let player of room.players) {
+    if (player.username !== room.scoringWinner && player.connected && !player.eliminated && player.declareStatus === 'pending') {
+      return false;
+    }
+  }
+  return true;
+}
+
+/**
+ * Concludes the scoring phase and transitions room to roundEnded state
+ */
+function endScoringPhase(room, io) {
+  room.scoringActive = false;
+  room.roundEnded = true;
+
+  for (let p of room.players) {
+    if (p.username !== room.scoringWinner && p.declareStatus !== 'submitted' && p.declareStatus !== 'valid') {
+      if (p.eliminated) {
+        p.lastRoundPoints = 0;
+        p.handGroups = [];
+        p.declareStatus = 'eliminated';
+      } else {
+        const bestGroups = arrangeHandIntoGroups(p.cards, room.wildJokerValue);
+        const points = calculateHandScore(bestGroups, room.wildJokerValue);
+        p.lastRoundPoints = points;
+        p.score += points;
+        p.declareStatus = 'timeout';
+        p.handGroups = bestGroups;
+      }
+    }
+  }
+
+  if (room.scoringTimerId) {
+    clearInterval(room.scoringTimerId);
+    room.scoringTimerId = null;
+  }
+
+  // Run tournament level elimination checking
+  checkMatchEliminations(room);
+
+  console.log(`[Scoring Phase Ended] Round ended for room ${room.roomCode}.`);
+  broadcastRoomState(room, io);
+}
+
+/**
+ * Checks players' total scores and runs tournament elimination rules
+ */
+function checkMatchEliminations(room) {
+  for (let p of room.players) {
+    if (!p.eliminated && p.score >= 240) {
+      p.eliminated = true;
+      console.log(`[Elimination] Player ${p.username} eliminated with score ${p.score}`);
+    }
+  }
+
+  const activePlayers = room.players.filter(p => !p.eliminated);
+
+  if (activePlayers.length === 1) {
+    room.matchFinished = true;
+    room.matchWinner = activePlayers[0].username;
+    console.log(`[Match Finished] Winner is ${room.matchWinner}`);
+  } else if (activePlayers.length === 0) {
+    // Edge case: all active players crossed 240 in the same round
+    // Winner is the player with the lowest score
+    let bestPlayer = null;
+    let lowestScore = Infinity;
+    for (let p of room.players) {
+      if (p.score < lowestScore) {
+        lowestScore = p.score;
+        bestPlayer = p;
+      }
+    }
+    room.matchFinished = true;
+    room.matchWinner = bestPlayer ? bestPlayer.username : null;
+    console.log(`[Match Finished] (All eliminated) Winner is ${room.matchWinner} with score ${lowestScore}`);
+  }
+}
+
 module.exports = {
   createRoom,
   joinRoom,
@@ -604,5 +1190,8 @@ module.exports = {
   discardCard,
   declareHand,
   restartGame,
-  handleDisconnect
+  handleDisconnect,
+  addBot,
+  submitLosingHand,
+  broadcastRoomState
 };

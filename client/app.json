@@ -1,6 +1,7 @@
 {
   "plugins": [
-    "expo-status-bar"
+    "expo-status-bar",
+    "expo-audio"
   ],
   "android": {
     "package": "com.anonymous.rummymultiplayerclient"

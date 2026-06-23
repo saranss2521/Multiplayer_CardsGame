@@ -51,6 +51,17 @@ export const useGameStore = create((set, get) => ({
   myHandGroups: [], // Array of Arrays of Cards: [[card1, card2], [card3, card4, card5], ...]
   selectedCardIds: [], // Currently selected card IDs in player's hand
   isDeclaring: false, // Whether the player is in declaring screen mode
+  soundMuted: false, // Whether gameplay audio is muted
+  
+  // Scoring Phase States
+  scoringActive: false,
+  scoringWinner: null,
+  scoringTimeLeft: 0,
+  hasSubmittedLosingHand: false,
+
+  // Tournament/Match States
+  matchFinished: false,
+  matchWinner: null,
   
   // Reset all states
   resetStore: () => {
@@ -70,7 +81,13 @@ export const useGameStore = create((set, get) => ({
       winner: null,
       myHandGroups: [],
       selectedCardIds: [],
-      isDeclaring: false
+      isDeclaring: false,
+      scoringActive: false,
+      scoringWinner: null,
+      scoringTimeLeft: 0,
+      hasSubmittedLosingHand: false,
+      matchFinished: false,
+      matchWinner: null
     });
   },
 
@@ -161,6 +178,9 @@ export const useGameStore = create((set, get) => ({
         }
       }
 
+      // Reset submission when a fresh round/game starts or is running normally without scoring active
+      const isFreshRound = state.gameStarted && !state.roundEnded && !state.scoringActive;
+
       set({
         roomCode: state.roomCode,
         gameStarted: state.gameStarted,
@@ -175,8 +195,17 @@ export const useGameStore = create((set, get) => ({
         winner: state.winner,
         players: state.players,
         myHandGroups: updatedHandGroups,
-        // Reset declaring screen when round ends or game restarts
-        isDeclaring: state.roundEnded ? false : get().isDeclaring
+        isDeclaring: state.roundEnded ? false : get().isDeclaring,
+        
+        // Scoring sync
+        scoringActive: state.scoringActive || false,
+        scoringWinner: state.scoringWinner || null,
+        scoringTimeLeft: state.scoringTimeLeft || 0,
+        hasSubmittedLosingHand: isFreshRound ? false : get().hasSubmittedLosingHand,
+
+        // Match sync
+        matchFinished: state.matchFinished || false,
+        matchWinner: state.matchWinner || null
       });
     });
 
@@ -221,8 +250,14 @@ export const useGameStore = create((set, get) => ({
   // Room Senders
 
   createRoom: (username, callback) => {
-    const { socket } = get();
-    if (!socket) return;
+    const { socket, connected } = get();
+    if (!socket || !connected) {
+      const errMsg = 'Not connected to server. Check your connection ribbon at the top.';
+      set({ error: errMsg });
+      setTimeout(() => set({ error: null }), 5000);
+      if (callback) callback({ error: errMsg });
+      return;
+    }
     
     socket.emit('create_room', { username }, (res) => {
       if (res.error) {
@@ -241,9 +276,46 @@ export const useGameStore = create((set, get) => ({
     });
   },
 
+  playWithComputer: (username, callback) => {
+    const { socket, connected } = get();
+    console.log('[gameStore] playWithComputer called. Connected:', connected);
+    if (!socket || !connected) {
+      const errMsg = 'Not connected to server. Check your connection ribbon at the top.';
+      set({ error: errMsg });
+      setTimeout(() => set({ error: null }), 5000);
+      if (callback) callback({ error: errMsg });
+      return;
+    }
+    
+    console.log('[gameStore] Emitting play_with_computer event...');
+    socket.emit('play_with_computer', { username }, (res) => {
+      console.log('[gameStore] play_with_computer response:', res);
+      if (res.error) {
+        set({ error: res.error });
+        setTimeout(() => set({ error: null }), 4000);
+        if (callback) callback(res);
+      } else {
+        set({
+          roomCode: res.roomCode,
+          username: res.username,
+          isAdmin: res.isAdmin,
+          gameStarted: true,
+          error: null
+        });
+        if (callback) callback(res);
+      }
+    });
+  },
+
   joinRoom: (roomCode, username, callback) => {
-    const { socket } = get();
-    if (!socket) return;
+    const { socket, connected } = get();
+    if (!socket || !connected) {
+      const errMsg = 'Not connected to server. Check your connection ribbon at the top.';
+      set({ error: errMsg });
+      setTimeout(() => set({ error: null }), 5000);
+      if (callback) callback({ error: errMsg });
+      return;
+    }
 
     socket.emit('join_room', { roomCode, username }, (res) => {
       if (res.error) {
@@ -321,6 +393,25 @@ export const useGameStore = create((set, get) => ({
         if (callback) callback(res);
       } else {
         set({ selectedCardIds: [], isDeclaring: false });
+        if (callback) callback(res);
+      }
+    });
+  },
+
+  submitLosingHand: (callback) => {
+    const { socket, roomCode, myHandGroups } = get();
+    if (!socket || !roomCode) return;
+
+    socket.emit('submit_losing_hand', {
+      roomCode,
+      groups: myHandGroups
+    }, (res) => {
+      if (res.success) {
+        set({ hasSubmittedLosingHand: true });
+        if (callback) callback(res);
+      } else {
+        set({ error: res.error });
+        setTimeout(() => set({ error: null }), 4000);
         if (callback) callback(res);
       }
     });
@@ -426,6 +517,10 @@ export const useGameStore = create((set, get) => ({
 
   setDeclaringMode: (enabled) => {
     set({ isDeclaring: enabled, selectedCardIds: [] });
+  },
+
+  toggleSoundMute: () => {
+    set({ soundMuted: !get().soundMuted });
   },
 
   clearError: () => set({ error: null })

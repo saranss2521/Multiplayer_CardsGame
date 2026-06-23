@@ -4,14 +4,15 @@ import {
   StyleSheet,
   View,
   Text,
-  SafeAreaView,
   StatusBar,
   TextInput,
   TouchableOpacity,
   Platform,
 } from 'react-native';
+import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import { useGameStore } from './store/gameStore';
 import LobbyScreen from './screens/LobbyScreen';
+import { playLobbyMusic, stopLobbyMusic } from './utils/audio';
 import WaitingRoomScreen from './screens/WaitingRoomScreen';
 import GameScreen from './screens/GameScreen';
 import ResultsScreen from './screens/ResultsScreen';
@@ -29,6 +30,8 @@ export default function App() {
   const gameStarted = useGameStore(state => state.gameStarted);
   const roundEnded = useGameStore(state => state.roundEnded);
   const socket = useGameStore(state => state.socket);
+  const soundMuted = useGameStore(state => state.soundMuted);
+  const toggleSoundMute = useGameStore(state => state.toggleSoundMute);
 
   // Initialize socket connection
   useEffect(() => {
@@ -40,6 +43,18 @@ export default function App() {
       }
     };
   }, [serverUrl]);
+
+  // Lobby background music controller
+  useEffect(() => {
+    if ((currentScreen === 'Lobby' || currentScreen === 'WaitingRoom') && !soundMuted) {
+      playLobbyMusic();
+    } else {
+      stopLobbyMusic();
+    }
+    return () => {
+      stopLobbyMusic();
+    };
+  }, [currentScreen, soundMuted]);
 
   // Synchronize navigation screens based on multiplayer game state
   useEffect(() => {
@@ -74,58 +89,70 @@ export default function App() {
   };
 
   return (
-    <SafeAreaView style={styles.safeArea}>
-      <StatusBar barStyle="light-content" backgroundColor="#052314" translucent={false} />
+    <SafeAreaProvider>
+      <SafeAreaView style={styles.safeArea}>
+        <StatusBar barStyle="light-content" backgroundColor="#052314" translucent={false} />
 
-      
-      {/* 1. Global Connection and Configuration Ribbon */}
-      {currentScreen === 'Lobby' && (
-        <View style={styles.statusRibbon}>
-          <View style={styles.statusLeft}>
-            <View style={[styles.statusDot, connected ? styles.onlineDot : styles.offlineDot]} />
-            <Text style={styles.statusText}>
-              {connected ? 'CONNECTED TO SERVER' : 'DISCONNECTED'}
+        {/* 1. Global Connection and Configuration Ribbon */}
+        {(currentScreen === 'Lobby' || currentScreen === 'WaitingRoom') && (
+          <View style={styles.statusRibbon}>
+            <View style={styles.statusLeft}>
+              <View style={[styles.statusDot, connected ? styles.onlineDot : styles.offlineDot]} />
+              <Text style={styles.statusText}>
+                {connected ? 'CONNECTED TO SERVER' : 'DISCONNECTED'}
+              </Text>
+            </View>
+
+            <View style={styles.statusRight}>
+              <TouchableOpacity 
+                style={[styles.configToggleBtn, { marginRight: 8 }]} 
+                onPress={() => toggleSoundMute()}
+              >
+                <Text style={styles.muteToggleText}>{soundMuted ? '🔇 Muted' : '🔊 Sound On'}</Text>
+              </TouchableOpacity>
+
+              {currentScreen === 'Lobby' && (
+                <TouchableOpacity 
+                  style={styles.configToggleBtn} 
+                  onPress={() => setShowConfig(!showConfig)}
+                >
+                  <Text style={styles.configToggleText}>⚙ Server IP</Text>
+                </TouchableOpacity>
+              )}
+            </View>
+          </View>
+        )}
+
+        {/* 2. Server URL Configuration Drawer */}
+        {showConfig && currentScreen === 'Lobby' && (
+          <View style={styles.configDrawer}>
+            <Text style={styles.configLabel}>Socket.IO Server Address:</Text>
+            <View style={styles.configInputRow}>
+              <TextInput
+                style={styles.configInput}
+                value={tempUrl}
+                onChangeText={setTempUrl}
+                placeholder="http://192.168.x.x:3000"
+                placeholderTextColor="rgba(255,255,255,0.4)"
+                autoCapitalize="none"
+                autoCorrect={false}
+              />
+              <TouchableOpacity style={styles.configSaveBtn} onPress={handleUpdateServerUrl}>
+                <Text style={styles.configSaveBtnText}>Save</Text>
+              </TouchableOpacity>
+            </View>
+            <Text style={styles.configHelpText}>
+              * Tip: If running on a physical phone, change 'localhost' to your computer's local network IP.
             </Text>
           </View>
+        )}
 
-          <TouchableOpacity 
-            style={styles.configToggleBtn} 
-            onPress={() => setShowConfig(!showConfig)}
-          >
-            <Text style={styles.configToggleText}>⚙ Server IP</Text>
-          </TouchableOpacity>
+        {/* 3. Active Screen Content */}
+        <View style={styles.screenContainer}>
+          {renderScreen()}
         </View>
-      )}
-
-      {/* 2. Server URL Configuration Drawer */}
-      {showConfig && currentScreen === 'Lobby' && (
-        <View style={styles.configDrawer}>
-          <Text style={styles.configLabel}>Socket.IO Server Address:</Text>
-          <View style={styles.configInputRow}>
-            <TextInput
-              style={styles.configInput}
-              value={tempUrl}
-              onChangeText={setTempUrl}
-              placeholder="http://192.168.x.x:3000"
-              placeholderTextColor="rgba(255,255,255,0.4)"
-              autoCapitalize="none"
-              autoCorrect={false}
-            />
-            <TouchableOpacity style={styles.configSaveBtn} onPress={handleUpdateServerUrl}>
-              <Text style={styles.configSaveBtnText}>Save</Text>
-            </TouchableOpacity>
-          </View>
-          <Text style={styles.configHelpText}>
-            * Tip: If running on a physical phone, change 'localhost' to your computer's local network IP.
-          </Text>
-        </View>
-      )}
-
-      {/* 3. Active Screen Content */}
-      <View style={styles.screenContainer}>
-        {renderScreen()}
-      </View>
-    </SafeAreaView>
+      </SafeAreaView>
+    </SafeAreaProvider>
   );
 }
 
@@ -183,6 +210,15 @@ const styles = StyleSheet.create({
     fontSize: 10,
     fontWeight: 'bold',
     color: '#E5C158',
+  },
+  statusRight: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  muteToggleText: {
+    fontSize: 10,
+    fontWeight: 'bold',
+    color: '#8AAB99',
   },
   configDrawer: {
     backgroundColor: 'rgba(0, 0, 0, 0.65)',

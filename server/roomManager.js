@@ -832,7 +832,7 @@ function arrangeHandIntoGroups(cards, wildJokerValue) {
         for (let c of run) {
           remainingCards.push(c);
         }
-        i++;
+        i = j;
       }
     }
   }

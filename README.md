@@ -1,3 +1,13 @@
+---
+title: Rummy Server
+emoji: 🎴
+colorFrom: green
+colorTo: yellow
+sdk: docker
+app_port: 7860
+pinned: false
+---
+
 # Royal Rummy - Multiplayer Indian Rummy Game (13-Card)
 
 Royal Rummy is a premium, real-time multiplayer 13-card Indian Rummy game built with **React Native (Expo)** on the frontend and **Node.js + Socket.IO** on the backend. 

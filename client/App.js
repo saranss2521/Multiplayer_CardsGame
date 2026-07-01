@@ -19,9 +19,9 @@ import ResultsScreen from './screens/ResultsScreen';
 
 export default function App() {
   const [currentScreen, setCurrentScreen] = useState('Lobby');
-  const [serverUrl, setServerUrl] = useState('https://multiplayer-cardsgame.onrender.com');
+  const [serverUrl, setServerUrl] = useState('https://saranait25110-rummy-server.hf.space');
   const [showConfig, setShowConfig] = useState(false);
-  const [tempUrl, setTempUrl] = useState('https://multiplayer-cardsgame.onrender.com');
+  const [tempUrl, setTempUrl] = useState('https://saranait25110-rummy-server.hf.space');
 
   // Zustand Store Hooks
   const connectSocket = useGameStore(state => state.connectSocket);

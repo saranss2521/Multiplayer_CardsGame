@@ -1,9 +1,19 @@
 {
-  "plugins": [
-    "expo-status-bar",
-    "expo-audio"
-  ],
-  "android": {
-    "package": "com.anonymous.rummymultiplayerclient"
+  "expo": {
+    "name": "Royal Rummy",
+    "slug": "rummy-multiplayer-client",
+    "version": "1.0.0",
+    "icon": "./assets/icon.png",
+    "android": {
+      "package": "com.anonymous.rummymultiplayerclient",
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#052314"
+      }
+    },
+    "plugins": [
+      "expo-status-bar",
+      "expo-audio"
+    ]
   }
 }

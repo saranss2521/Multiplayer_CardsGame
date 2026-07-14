@@ -1,6 +1,7 @@
 // gameStore.js - Zustand State Store with Socket.IO Integration for Rummy Frontend
 import { create } from 'zustand';
 import { io } from 'socket.io-client';
+import { Alert } from 'react-native';
 
 // Helper to group raw cards by Suit and sort them by value
 function autoSortCards(cards) {
@@ -59,6 +60,10 @@ export const useGameStore = create((set, get) => ({
   scoringTimeLeft: 0,
   hasSubmittedLosingHand: false,
 
+  // Toss Phase States
+  tossActive: false,
+  tossTimeout: 0,
+
   // Tournament/Match States
   matchFinished: false,
   matchWinner: null,
@@ -86,6 +91,8 @@ export const useGameStore = create((set, get) => ({
       scoringWinner: null,
       scoringTimeLeft: 0,
       hasSubmittedLosingHand: false,
+      tossActive: false,
+      tossTimeout: 0,
       matchFinished: false,
       matchWinner: null
     });
@@ -202,6 +209,10 @@ export const useGameStore = create((set, get) => ({
         scoringWinner: state.scoringWinner || null,
         scoringTimeLeft: state.scoringTimeLeft || 0,
         hasSubmittedLosingHand: isFreshRound ? false : get().hasSubmittedLosingHand,
+
+        // Toss sync
+        tossActive: state.tossActive || false,
+        tossTimeout: state.tossTimeout || 0,
 
         // Match sync
         matchFinished: state.matchFinished || false,
@@ -334,11 +345,11 @@ export const useGameStore = create((set, get) => ({
     });
   },
 
-  startGame: () => {
+  startGame: (enableToss = false) => {
     const { socket, roomCode } = get();
     if (!socket || !roomCode) return;
 
-    socket.emit('start_game', { roomCode }, (res) => {
+    socket.emit('start_game', { roomCode, enableToss }, (res) => {
       if (res.error) {
         set({ error: res.error });
         setTimeout(() => set({ error: null }), 4000);
@@ -466,6 +477,12 @@ export const useGameStore = create((set, get) => ({
       group.filter(card => !selectedCardIds.includes(card.id))
     ).filter(group => group.length > 0);
 
+    // Enforce 5-group limit
+    if (updatedGroups.length >= 5) {
+      Alert.alert('Group Limit Reached', 'You can have a maximum of 5 groups. Please drag or move cards to existing groups.');
+      return;
+    }
+
     // Append as a new group
     updatedGroups.push(selectedCards);
 
@@ -504,6 +521,11 @@ export const useGameStore = create((set, get) => ({
 
     // If targetGroupIndex is out of range, create a new group
     if (targetGroupIndex >= cleanedGroups.length) {
+      // Enforce 5-group limit
+      if (cleanedGroups.length >= 5) {
+        Alert.alert('Group Limit Reached', 'You can have a maximum of 5 groups. Please drag or move cards to existing groups.');
+        return;
+      }
       cleanedGroups.push([targetCard]);
     } else {
       // Insert card into target group at targetCardIndex

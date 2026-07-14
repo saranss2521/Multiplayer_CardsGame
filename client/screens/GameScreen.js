@@ -35,6 +35,8 @@ export default function GameScreen({ onNavigate }) {
   const discardPile = useGameStore(state => state.discardPile);
   const winner = useGameStore(state => state.winner);
   const error = useGameStore(state => state.error);
+  const tossActive = useGameStore(state => state.tossActive);
+  const tossTimeout = useGameStore(state => state.tossTimeout);
   
   // Local/Store hand management
   const myHandGroups = useGameStore(state => state.myHandGroups);
@@ -86,9 +88,9 @@ export default function GameScreen({ onNavigate }) {
     groupRefs.current = groupRefs.current.slice(0, myHandGroups.length);
   }, [myHandGroups]);
 
-  const measureZone = (ref, name, groupIdx = null) => {
+  const measureZone = (ref, name, groupIdx = null, useTimeout = true) => {
     if (ref && ref.current) {
-      setTimeout(() => {
+      const performMeasure = () => {
         ref.current?.measureInWindow((x, y, width, height) => {
           if (groupIdx !== null) {
             setDropZones(prev => ({
@@ -105,16 +107,22 @@ export default function GameScreen({ onNavigate }) {
             }));
           }
         });
-      }, 150);
+      };
+
+      if (useTimeout) {
+        setTimeout(performMeasure, 150);
+      } else {
+        performMeasure();
+      }
     }
   };
 
-  const measureAllZones = () => {
-    measureZone(discardRef, 'discard');
-    measureZone(finishRef, 'finish');
+  const measureAllZones = (useTimeout = false) => {
+    measureZone(discardRef, 'discard', null, useTimeout);
+    measureZone(finishRef, 'finish', null, useTimeout);
     myHandGroups.forEach((group, idx) => {
       if (groupRefs.current[idx]) {
-        measureZone({ current: groupRefs.current[idx] }, 'groups', idx);
+        measureZone({ current: groupRefs.current[idx] }, 'groups', idx, useTimeout);
       }
     });
   };
@@ -144,7 +152,7 @@ export default function GameScreen({ onNavigate }) {
   };
 
   const handleDragStart = () => {
-    measureAllZones();
+    measureAllZones(false);
   };
 
   const handleDragRelease = (cardId, moveX, moveY, resetCardPosition) => {
@@ -192,35 +200,80 @@ export default function GameScreen({ onNavigate }) {
       }
     }
 
-    // 3. Check Card Group Targets
-    let targetGroupIdx = -1;
-    for (const key in dropZones.groups) {
-      const gZone = dropZones.groups[key];
-      if (
-        gZone &&
-        moveX >= gZone.x &&
-        moveX <= gZone.x + gZone.width &&
-        moveY >= gZone.y &&
-        moveY <= gZone.y + gZone.height
-      ) {
-        targetGroupIdx = parseInt(key);
+    // Find source group index of the dragged card
+    let sourceGroupIdx = -1;
+    for (let i = 0; i < myHandGroups.length; i++) {
+      if (myHandGroups[i].some(c => c.id === cardId)) {
+        sourceGroupIdx = i;
         break;
       }
     }
 
-    if (targetGroupIdx !== -1) {
-      let sourceGroupIdx = -1;
-      for (let i = 0; i < myHandGroups.length; i++) {
-        if (myHandGroups[i].some(c => c.id === cardId)) {
-          sourceGroupIdx = i;
-          break;
+    // 3. Check Card Group Targets (magnetic and reordering)
+    let targetGroupIdx = -1;
+    let closestDistance = Infinity;
+
+    for (const key in dropZones.groups) {
+      const gZone = dropZones.groups[key];
+      if (gZone) {
+        // High vertical tolerance: 60px above and 80px below the group area
+        const isWithinVerticalRange = moveY >= gZone.y - 60 && moveY <= gZone.y + gZone.height + 80;
+        
+        if (isWithinVerticalRange) {
+          // Horizontal center of the group container
+          const groupCenter = gZone.x + gZone.width / 2;
+          const distance = Math.abs(moveX - groupCenter);
+          
+          // Horizontal tolerance: group bounds with 30px extra padding on each side
+          const isWithinHorizontalRange = moveX >= gZone.x - 30 && moveX <= gZone.x + gZone.width + 30;
+          
+          if (isWithinHorizontalRange && distance < closestDistance) {
+            closestDistance = distance;
+            targetGroupIdx = parseInt(key);
+          }
         }
       }
+    }
 
-      if (sourceGroupIdx !== -1 && sourceGroupIdx !== targetGroupIdx) {
+    if (targetGroupIdx !== -1) {
+      if (sourceGroupIdx !== -1) {
+        const gZone = dropZones.groups[targetGroupIdx];
+        const relativeX = moveX - gZone.x;
+        const targetGroup = myHandGroups[targetGroupIdx];
+        let targetCardIdx = 0;
+        
+        if (targetGroup && targetGroup.length > 0) {
+          // spacing between cards is 36px
+          targetCardIdx = Math.round(relativeX / 36);
+          targetCardIdx = Math.max(0, Math.min(targetCardIdx, targetGroup.length));
+        }
+
         playSound('https://www.soundjay.com/misc/sounds/card-deal-1.mp3');
-        moveCard(cardId, targetGroupIdx, 0);
+        moveCard(cardId, targetGroupIdx, targetCardIdx);
         return;
+      }
+    }
+
+    // 4. Check if dragging to the empty space on the right of all groups to create a new group
+    let maxRight = 0;
+    let anyGroupZone = null;
+    for (const key in dropZones.groups) {
+      const gZone = dropZones.groups[key];
+      if (gZone) {
+        anyGroupZone = gZone;
+        maxRight = Math.max(maxRight, gZone.x + gZone.width);
+      }
+    }
+
+    if (anyGroupZone && moveY >= anyGroupZone.y - 60 && moveY <= anyGroupZone.y + anyGroupZone.height + 80) {
+      if (moveX > maxRight + 15) {
+        if (myHandGroups.length < 5) {
+          playSound('https://www.soundjay.com/misc/sounds/card-deal-1.mp3');
+          moveCard(cardId, 99, 0); // index 99 will push a new group
+          return;
+        } else {
+          Alert.alert('Group Limit Reached', 'You can have a maximum of 5 groups. Please drag or move cards to existing groups.');
+        }
       }
     }
 
@@ -344,6 +397,37 @@ export default function GameScreen({ onNavigate }) {
         </View>
         <Text style={styles.portraitText}>Please rotate your device to Landscape to play!</Text>
         <Text style={styles.portraitSubText}>The casino card table is optimized for widescreen play.</Text>
+      </View>
+    );
+  }
+
+  if (tossActive) {
+    return (
+      <View style={styles.portraitContainer}>
+        <View style={styles.portraitGlow} />
+        <Text style={styles.tossTitle}>♠ SEATING TOSS ROUND ♥</Text>
+        <Text style={styles.tossSubText}>
+          Each player is dealt a random card. Seating and turn positions are sorted from highest to lowest.
+        </Text>
+        
+        <ScrollView horizontal contentContainerStyle={styles.tossCardsRow} showsHorizontalScrollIndicator={false}>
+          {players.map((p, idx) => (
+            <View key={p.id || idx} style={styles.tossPlayerItem}>
+              <Text numberOfLines={1} style={styles.tossUsername}>{p.username}</Text>
+              <View style={styles.tossCardWrapper}>
+                {p.tossCard ? (
+                  <Card card={p.tossCard} isSelected={false} isWildJoker={false} dragEnabled={false} />
+                ) : (
+                  <View style={styles.emptyTossCard}>
+                    <Text style={styles.emptyTossText}>Dealing...</Text>
+                  </View>
+                )}
+              </View>
+            </View>
+          ))}
+        </ScrollView>
+
+        <Text style={styles.tossCountdown}>Starting Match in {tossTimeout}s...</Text>
       </View>
     );
   }
@@ -598,11 +682,11 @@ export default function GameScreen({ onNavigate }) {
               showsHorizontalScrollIndicator={false}
               style={styles.handGroupsScrollView}
               contentContainerStyle={styles.handGroupsRowContent}
-              onScrollEndDrag={measureAllZones}
-              onMomentumScrollEnd={measureAllZones}
+              onScrollEndDrag={() => measureAllZones(false)}
+              onMomentumScrollEnd={() => measureAllZones(false)}
             >
               {myHandGroups.map((group, groupIdx) => {
-                const stackWidth = group.length > 0 ? (group.length - 1) * 26 + 68 : 0;
+                const stackWidth = group.length > 0 ? (group.length - 1) * 36 + 68 : 0;
                 return (
                   <View 
                     key={groupIdx} 
@@ -635,7 +719,7 @@ export default function GameScreen({ onNavigate }) {
                         
                         return (
                           <Card 
-                            key={card.id}
+                            key={`${card.id}-${groupIdx}-${cardIdx}`}
                             card={card}
                             isSelected={isSelected}
                             isWildJoker={isWild}
@@ -643,7 +727,7 @@ export default function GameScreen({ onNavigate }) {
                             dragEnabled={!hasSubmittedLosingHand}
                             onDragStart={handleDragStart}
                             onDragRelease={handleDragRelease}
-                            style={!isLast ? { marginRight: -42 } : { marginRight: 0 }}
+                            style={!isLast ? { marginRight: -32 } : { marginRight: 0 }}
                           />
                         );
                       })}
@@ -1485,5 +1569,78 @@ const styles = StyleSheet.create({
   eliminatedPlayerText: {
     color: '#888',
     textDecorationLine: 'line-through',
+  },
+  tossTitle: {
+    fontSize: 20,
+    fontWeight: '900',
+    color: '#E5C158',
+    letterSpacing: 1.5,
+    marginBottom: 6,
+    textAlign: 'center',
+    textShadowColor: 'rgba(0,0,0,0.6)',
+    textShadowOffset: { width: 0, height: 2 },
+    textShadowRadius: 4,
+  },
+  tossSubText: {
+    fontSize: 11,
+    color: '#A2C2B2',
+    textAlign: 'center',
+    marginBottom: 16,
+    maxWidth: 550,
+  },
+  tossCardsRow: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 10,
+    minHeight: 140,
+  },
+  tossPlayerItem: {
+    alignItems: 'center',
+    marginHorizontal: 10,
+    backgroundColor: 'rgba(0, 0, 0, 0.3)',
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    borderRadius: 12,
+    borderColor: 'rgba(255, 255, 255, 0.05)',
+    borderWidth: 1.2,
+    minWidth: 90,
+  },
+  tossUsername: {
+    fontSize: 11,
+    fontWeight: 'bold',
+    color: '#FFF',
+    marginBottom: 8,
+    maxWidth: 80,
+    textAlign: 'center',
+  },
+  tossCardWrapper: {
+    width: 62,
+    height: 94,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  emptyTossCard: {
+    width: 62,
+    height: 94,
+    borderRadius: 8,
+    borderStyle: 'dashed',
+    borderColor: '#8AAB99',
+    borderWidth: 1.5,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: 'rgba(0,0,0,0.1)',
+  },
+  emptyTossText: {
+    fontSize: 9,
+    color: '#8AAB99',
+    fontWeight: 'bold',
+  },
+  tossCountdown: {
+    fontSize: 14,
+    fontWeight: '900',
+    color: '#E5C158',
+    marginTop: 15,
+    textAlign: 'center',
   }
 });

@@ -23,6 +23,8 @@ export default function WaitingRoomScreen({ onNavigate }) {
   const resetStore = useGameStore(state => state.resetStore);
   const socket = useGameStore(state => state.socket);
 
+  const [tossEnabled, setTossEnabled] = React.useState(false);
+
   const { width, height } = useWindowDimensions();
   const isLandscape = width > height;
 
@@ -36,7 +38,7 @@ export default function WaitingRoomScreen({ onNavigate }) {
 
   const handleStartGame = () => {
     if (players.length < 2) return;
-    startGame();
+    startGame(tossEnabled);
   };
 
   const exitFullscreen = () => {
@@ -106,6 +108,19 @@ export default function WaitingRoomScreen({ onNavigate }) {
                   onPress={handleAddComputer}
                 >
                   <Text style={styles.addComputerBtnText}>🤖 Add Computer</Text>
+                </TouchableOpacity>
+              )}
+
+              {isAdmin && (
+                <TouchableOpacity
+                  activeOpacity={0.7}
+                  style={styles.tossToggleRow}
+                  onPress={() => setTossEnabled(!tossEnabled)}
+                >
+                  <View style={[styles.checkbox, tossEnabled && styles.checkboxChecked]}>
+                    {tossEnabled && <Text style={styles.checkboxTick}>✓</Text>}
+                  </View>
+                  <Text style={styles.tossToggleText}>Toss to Decide Seats</Text>
                 </TouchableOpacity>
               )}
 
@@ -183,6 +198,19 @@ export default function WaitingRoomScreen({ onNavigate }) {
                   onPress={handleAddComputer}
                 >
                   <Text style={styles.addComputerBtnText}>🤖 Add Computer</Text>
+                </TouchableOpacity>
+              )}
+
+              {isAdmin && (
+                <TouchableOpacity
+                  activeOpacity={0.7}
+                  style={styles.tossToggleRow}
+                  onPress={() => setTossEnabled(!tossEnabled)}
+                >
+                  <View style={[styles.checkbox, tossEnabled && styles.checkboxChecked]}>
+                    {tossEnabled && <Text style={styles.checkboxTick}>✓</Text>}
+                  </View>
+                  <Text style={styles.tossToggleText}>Toss to Decide Seats</Text>
                 </TouchableOpacity>
               )}
 
@@ -515,5 +543,35 @@ const styles = StyleSheet.create({
     color: '#FFF',
     fontSize: 16,
     fontWeight: '700',
+  },
+  tossToggleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 12,
+    width: '100%',
+  },
+  checkbox: {
+    width: 18,
+    height: 18,
+    borderRadius: 4,
+    borderWidth: 1.5,
+    borderColor: '#E5C158',
+    marginRight: 10,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  checkboxChecked: {
+    backgroundColor: '#E5C158',
+  },
+  checkboxTick: {
+    color: '#052314',
+    fontSize: 11,
+    fontWeight: 'bold',
+  },
+  tossToggleText: {
+    color: '#FFF',
+    fontSize: 13,
+    fontWeight: '600',
   }
 });

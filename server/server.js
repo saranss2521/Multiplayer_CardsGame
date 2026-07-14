@@ -98,14 +98,14 @@ io.on('connection', (socket) => {
   });
 
   // Start Game
-  socket.on('start_game', ({ roomCode }, callback) => {
+  socket.on('start_game', ({ roomCode, enableToss }, callback) => {
     try {
-      const result = roomManager.startGame(roomCode, socket.id, io);
+      const result = roomManager.startGame(roomCode, socket.id, io, enableToss);
       if (result.error) {
         return callback({ error: result.error });
       }
 
-      console.log(`[Game Started] Room: ${roomCode}`);
+      console.log(`[Game Started] Room: ${roomCode}, Toss: ${enableToss}`);
       callback({ success: true });
 
       // Update room state for everyone

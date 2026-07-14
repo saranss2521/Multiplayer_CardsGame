@@ -1,4 +1,4 @@
-import React, { useRef } from 'react';
+import React, { useRef, useState } from 'react';
 import { StyleSheet, Text, View, TouchableOpacity, Platform, Animated, PanResponder } from 'react-native';
 
 const SUIT_SYMBOLS = {
@@ -33,25 +33,29 @@ export default function Card({ card, isSelected, onPress, isWildJoker, style, on
   const displayValue = VALUE_NAMES[value] || value;
 
   const pan = useRef(new Animated.ValueXY()).current;
-  const isDragging = useRef(false);
+  const [isDragging, setIsDragging] = useState(false);
+
+  // Keep props fresh to prevent stale closure bugs in PanResponder
+  const propsRef = useRef({ card, dragEnabled, onDragStart, onDragRelease });
+  propsRef.current = { card, dragEnabled, onDragStart, onDragRelease };
 
   const panResponder = useRef(
     PanResponder.create({
       onStartShouldSetPanResponder: () => false,
       onMoveShouldSetPanResponder: (evt, gestureState) => {
-        if (!dragEnabled) return false;
+        if (!propsRef.current.dragEnabled) return false;
         // Capture only if dragged more than 5 pixels
         return Math.abs(gestureState.dx) > 5 || Math.abs(gestureState.dy) > 5;
       },
       onPanResponderGrant: () => {
-        isDragging.current = true;
+        setIsDragging(true);
         pan.setOffset({
           x: pan.x._value,
           y: pan.y._value
         });
         pan.setValue({ x: 0, y: 0 });
-        if (onDragStart) {
-          onDragStart();
+        if (propsRef.current.onDragStart) {
+          propsRef.current.onDragStart();
         }
       },
       onPanResponderMove: Animated.event(
@@ -59,11 +63,11 @@ export default function Card({ card, isSelected, onPress, isWildJoker, style, on
         { useNativeDriver: false }
       ),
       onPanResponderRelease: (e, gestureState) => {
-        isDragging.current = false;
+        setIsDragging(false);
         pan.flattenOffset();
         
-        if (onDragRelease) {
-          onDragRelease(card.id, gestureState.moveX, gestureState.moveY, () => {
+        if (propsRef.current.onDragRelease) {
+          propsRef.current.onDragRelease(propsRef.current.card.id, gestureState.moveX, gestureState.moveY, () => {
             // Spring back if dropped invalidly
             Animated.spring(pan, {
               toValue: { x: 0, y: 0 },
@@ -100,7 +104,8 @@ export default function Card({ card, isSelected, onPress, isWildJoker, style, on
           styles.cardContainer,
           transformStyles,
           style,
-          isDragging.current && { zIndex: 999, elevation: 999 }
+          isDragging && { zIndex: 999, elevation: 999 },
+          isSelected && { zIndex: 10, elevation: 10 }
         ]}
       >
         <TouchableOpacity
@@ -127,7 +132,8 @@ export default function Card({ card, isSelected, onPress, isWildJoker, style, on
         styles.cardContainer,
         transformStyles,
         style,
-        isDragging.current && { zIndex: 999, elevation: 999 }
+        isDragging && { zIndex: 999, elevation: 999 },
+        isSelected && { zIndex: 10, elevation: 10 }
       ]}
     >
       <TouchableOpacity

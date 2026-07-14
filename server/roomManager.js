@@ -48,7 +48,7 @@ function getSanitizedRoomState(room, requestSocketId) {
     timeLeft: room.timeLeft,
     wildJokerCard: room.wildJokerCard,
     wildJokerValue: room.wildJokerValue,
-    deckCount: room.deck.length,
+    deckCount: room.deck ? room.deck.length : 0,
     discardPile: room.discardPile,
     winner: room.winner,
     scoringActive: room.scoringActive || false,
@@ -56,6 +56,11 @@ function getSanitizedRoomState(room, requestSocketId) {
     scoringTimeLeft: room.scoringTimeLeft || 0,
     matchFinished: room.matchFinished || false,
     matchWinner: room.matchWinner || null,
+    
+    // Toss Phase Sync
+    tossActive: room.tossActive || false,
+    tossTimeout: room.tossTimeout || 0,
+
     players: room.players.map(p => ({
       id: p.id,
       username: p.username,
@@ -66,6 +71,10 @@ function getSanitizedRoomState(room, requestSocketId) {
       lastRoundPoints: p.lastRoundPoints,
       declareStatus: p.declareStatus,
       eliminated: p.eliminated || false,
+      
+      // Toss Card is always public to everyone during the seating round
+      tossCard: p.tossCard || null,
+
       // Only show card counts for other players, unless the round has ended
       cardCount: p.cards ? p.cards.length : 0,
       cards: (p.id === requestSocketId || room.roundEnded) ? p.cards : undefined,
@@ -304,7 +313,68 @@ function joinRoom(roomCode, username, socketId) {
   return { room, reconnected: false };
 }
 
-function startGame(roomCode, socketId, io) {
+function getTossCardPriority(card) {
+  if (!card) return 0;
+  // Ace is highest (14), King is 13, Q is 12, J is 11, etc.
+  const valueWeight = card.value === 1 ? 14 : card.value;
+  
+  // Suit priority: Spades (4) > Hearts (3) > Diamonds (2) > Clubs (1)
+  let suitWeight = 0;
+  if (card.suit === 'S') suitWeight = 4;
+  else if (card.suit === 'H') suitWeight = 3;
+  else if (card.suit === 'D') suitWeight = 2;
+  else if (card.suit === 'C') suitWeight = 1;
+
+  return valueWeight * 10 + suitWeight;
+}
+
+function concludeTossAndDeal(room, io) {
+  console.log(`[Toss Concluded] Sorting players based on card priorities in room ${room.roomCode}`);
+  
+  // Sort players descending based on their toss card priority
+  room.players.sort((a, b) => getTossCardPriority(b.tossCard) - getTossCardPriority(a.tossCard));
+  
+  // End toss phase
+  room.tossActive = false;
+  room.tossTimeout = 0;
+
+  // 1. Create and shuffle 108 cards
+  const fullDeck = createDeck();
+  room.deck = shuffle(fullDeck);
+
+  // 2. Deal 13 cards to each player (who is not eliminated)
+  for (let p of room.players) {
+    p.cards = [];
+    p.declareStatus = p.eliminated ? 'eliminated' : 'pending';
+    p.lastRoundPoints = 0;
+    p.handGroups = [];
+    if (!p.eliminated) {
+      for (let i = 0; i < 13; i++) {
+        p.cards.push(room.deck.pop());
+      }
+    }
+  }
+
+  // 3. Draw a Wild Joker card
+  room.wildJokerCard = room.deck.pop();
+  if (room.wildJokerCard.isPrintedJoker || room.wildJokerCard.suit === 'J') {
+    room.wildJokerValue = 1;
+  } else {
+    room.wildJokerValue = room.wildJokerCard.value;
+  }
+
+  // 4. Open Discard Pile
+  room.discardPile = [room.deck.pop()];
+
+  // Toss winner (player at index 0 after sorting) gets the first turn!
+  room.turnIndex = 0;
+
+  // Broadcast the fresh game start state to everyone and kick off the turn timer
+  broadcastRoomState(room, io);
+  startTurnTimer(room, io);
+}
+
+function startGame(roomCode, socketId, io, enableToss = false) {
   const room = rooms.get(roomCode);
   if (!room) return { error: 'Room not found.' };
 
@@ -336,6 +406,49 @@ function startGame(roomCode, socketId, io) {
     }
   }
 
+  // Clear any existing intervals
+  if (room.tossTimerId) {
+    clearInterval(room.tossTimerId);
+    room.tossTimerId = null;
+  }
+
+  // Handle Toss Phase (only on first match start)
+  if (enableToss && wasGameNotStarted) {
+    room.tossActive = true;
+    room.tossTimeout = 6; // 6 seconds countdown
+
+    // Create deck and shuffle
+    const fullDeck = createDeck();
+    room.deck = shuffle(fullDeck);
+
+    // Deal 1 card for toss to each player
+    for (let p of room.players) {
+      p.tossCard = room.deck.pop();
+      p.cards = [];
+      p.handGroups = [];
+      p.declareStatus = 'pending';
+      p.lastRoundPoints = 0;
+    }
+
+    // Tick toss countdown
+    room.tossTimerId = setInterval(() => {
+      room.tossTimeout--;
+      broadcastRoomState(room, io);
+
+      if (room.tossTimeout <= 0) {
+        clearInterval(room.tossTimerId);
+        room.tossTimerId = null;
+        concludeTossAndDeal(room, io);
+      }
+    }, 1000);
+
+    return { room };
+  }
+
+  // Standard Game Start (directly deal 13 cards, clear toss cards)
+  room.tossActive = false;
+  room.tossTimeout = 0;
+
   // 1. Create and shuffle 108 cards (2 decks + 4 jokers)
   const fullDeck = createDeck();
   room.deck = shuffle(fullDeck);
@@ -343,6 +456,7 @@ function startGame(roomCode, socketId, io) {
   // 2. Deal 13 cards to each player (who is not eliminated)
   for (let p of room.players) {
     p.cards = [];
+    p.tossCard = null; // Clear toss card
     p.declareStatus = p.eliminated ? 'eliminated' : 'pending';
     p.lastRoundPoints = 0;
     p.handGroups = []; // Reset groups for the round
@@ -356,7 +470,6 @@ function startGame(roomCode, socketId, io) {
   // 3. Draw a Wild Joker card
   room.wildJokerCard = room.deck.pop();
   if (room.wildJokerCard.isPrintedJoker || room.wildJokerCard.suit === 'J') {
-    // If printed joker drawn, Ace (1) becomes the wild joker
     room.wildJokerValue = 1;
   } else {
     room.wildJokerValue = room.wildJokerCard.value;
@@ -365,9 +478,19 @@ function startGame(roomCode, socketId, io) {
   // 4. Open Discard Pile
   room.discardPile = [room.deck.pop()];
 
-  // Set first active player turnIndex
-  let firstActiveIdx = room.players.findIndex(p => !p.eliminated);
-  room.turnIndex = firstActiveIdx !== -1 ? firstActiveIdx : 0;
+  // Set first active player turnIndex (Randomized among active players)
+  const activeIndices = [];
+  for (let i = 0; i < room.players.length; i++) {
+    if (!room.players[i].eliminated) {
+      activeIndices.push(i);
+    }
+  }
+  if (activeIndices.length > 0) {
+    const randomIdx = Math.floor(Math.random() * activeIndices.length);
+    room.turnIndex = activeIndices[randomIdx];
+  } else {
+    room.turnIndex = 0;
+  }
 
   // Start turn timer
   startTurnTimer(room, io);
